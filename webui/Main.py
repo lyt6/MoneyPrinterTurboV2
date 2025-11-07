@@ -143,6 +143,10 @@ def get_all_fonts():
         "MicrosoftYaHei",
         "SimSun",
         "KaiTi",
+        "LXGWWenKai",  # 霞鹜文楷（毛笔手写风格）
+        "Zhudou",      # 江西拙楷
+        "STXingkai",   # 华文行楷
+        "SmileySans",  # 得意黑
     ]
     
     fonts = []
@@ -529,6 +533,36 @@ with left_panel:
             key="video_subject_input",
         ).strip()
 
+        # 添加视频时长选择
+        video_durations = [
+            ("5秒", 5),
+            ("10秒", 10),
+            ("30秒", 30),
+            ("1分钟", 60),
+            ("3分钟", 180),
+            ("5分钟", 300),
+            ("10分钟", 600),
+            ("20分钟", 1200),
+            ("30分钟", 1800),
+        ]
+        
+        # 获取保存的时长设置，默认为1分钟
+        saved_duration = config.ui.get("video_duration", 60)
+        saved_duration_index = 0
+        for i, (_, duration) in enumerate(video_durations):
+            if duration == saved_duration:
+                saved_duration_index = i
+                break
+        
+        selected_duration_index = st.selectbox(
+            tr("Video Duration"),
+            options=range(len(video_durations)),
+            format_func=lambda x: video_durations[x][0],
+            index=saved_duration_index,
+        )
+        selected_video_duration = video_durations[selected_duration_index][1]
+        config.ui["video_duration"] = selected_video_duration
+
         video_languages = [
             (tr("Auto Detect"), ""),
         ]
@@ -552,7 +586,9 @@ with left_panel:
         ):
             with st.spinner(tr("Generating Video Script and Keywords")):
                 script = llm.generate_script(
-                    video_subject=params.video_subject, language=params.video_language
+                    video_subject=params.video_subject, 
+                    language=params.video_language,
+                    video_duration=selected_video_duration
                 )
                 terms = llm.generate_terms(params.video_subject, script)
                 if "Error: " in script:
@@ -652,8 +688,10 @@ with middle_panel:
         )
 
         video_aspect_ratios = [
-            (tr("Portrait"), VideoAspect.portrait.value),
-            (tr("Landscape"), VideoAspect.landscape.value),
+            (tr("Portrait") + " (1080x1920)", VideoAspect.portrait.value),
+            (tr("Portrait") + " 720p (720x1280)", VideoAspect.portrait_720p.value),
+            (tr("Landscape") + " (1920x1080)", VideoAspect.landscape.value),
+            (tr("Landscape") + " 720p (1280x720)", VideoAspect.landscape_720p.value),
         ]
         selected_index = st.selectbox(
             tr("Video Ratio"),
@@ -673,6 +711,13 @@ with middle_panel:
             tr("Number of Videos Generated Simultaneously"),
             options=[1, 2, 3, 4, 5],
             index=0,
+        )
+        
+        # 缩放动画开关
+        params.enable_video_animation = st.checkbox(
+            tr("Enable Video Animation"),
+            value=False,
+            help=tr("Enable zoom animation effect (slower but more dynamic)"),
         )
     with st.container(border=True):
         st.write(tr("Audio Settings"))
@@ -900,7 +945,24 @@ with right_panel:
         st.write(tr("Subtitle Settings"))
         params.subtitle_enabled = st.checkbox(tr("Enable Subtitles"), value=True)
         font_names, font_display_names = get_all_fonts()
-        saved_font_name = config.ui.get("font_name", "STHeitiMedium.ttc")
+        
+        # 默认字体优先级：毛笔手写体 > 黑体
+        default_font_priority = [
+            "LXGWWenKai-Regular.ttf",    # 霞鹜文楷（推荐）
+            "LXGWWenKai-Bold.ttf",       # 霞鹜文楷粗体
+            "Zhudou-Sans.ttf",           # 江西拙楷
+            "STXingkai.ttf",             # 华文行楷
+            "STHeitiMedium.ttc",         # 黑体（备选）
+        ]
+        
+        # 尝试从优先级列表中找到第一个存在的字体
+        default_font = "STHeitiMedium.ttc"  # 最后备选
+        for font in default_font_priority:
+            if font in font_names:
+                default_font = font
+                break
+        
+        saved_font_name = config.ui.get("font_name", default_font)
         saved_font_name_index = 0
         if saved_font_name in font_names:
             saved_font_name_index = font_names.index(saved_font_name)
@@ -919,11 +981,12 @@ with right_panel:
             (tr("Top"), "top"),
             (tr("Center"), "center"),
             (tr("Bottom"), "bottom"),
+            (tr("Bottom (20%)"), "bottom_20"),
             (tr("Custom"), "custom"),
         ]
         selected_index = st.selectbox(
             tr("Position"),
-            index=2,
+            index=3,  # 默认选择"底部（20%）"
             options=range(len(subtitle_positions)),
             format_func=lambda x: subtitle_positions[x][0],
         )

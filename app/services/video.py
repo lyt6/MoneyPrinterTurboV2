@@ -98,6 +98,104 @@ def delete_files(files: List[str] | str):
         except:
             pass
 
+
+def _generate_video_from_single_image(
+    image_path: str,
+    audio_duration: float,
+    output_path: str,
+    video_width: int,
+    video_height: int,
+    threads: int = 2,
+    enable_animation: bool = False
+) -> str:
+    """
+    从单一图片直接生成视频，可选缩放动画效果
+    使用优化的编码参数以提升速度
+    """
+    logger.info(f"generating video from single image: {image_path}")
+    logger.info(f"  - target resolution: {video_width}x{video_height}")
+    logger.info(f"  - duration: {audio_duration:.2f}s")
+    logger.info(f"  - animation: {'enabled' if enable_animation else 'disabled'}")
+    
+    try:
+        # 创建图片剪辑，设置时长为音频时长
+        clip = ImageClip(image_path).with_duration(audio_duration).with_position("center")
+        
+        # 检查图片尺寸
+        img_width, img_height = clip.size
+        logger.info(f"  - source image size: {img_width}x{img_height}")
+        
+        # 计算缩放比例
+        img_ratio = img_width / img_height
+        video_ratio = video_width / video_height
+        
+        # 根据开关决定是否应用缩放效果
+        if enable_animation:
+            # 应用缩放效果：从100%缓慢放大到120%
+            zoom_factor = 1.2
+            zoom_clip = clip.resized(lambda t: 1 + (zoom_factor - 1) * (t / audio_duration))
+            logger.info(f"  - zoom animation enabled (100% -> 120%)")
+        else:
+            # 不应用缩放效果，直接使用静态图片（更快）
+            zoom_clip = clip
+            logger.info(f"  - static image (no animation, faster)")
+        
+        # 处理尺寸不匹配的情况
+        if abs(img_ratio - video_ratio) > 0.01:  # 比例不同
+            logger.info(f"  - image ratio ({img_ratio:.2f}) != video ratio ({video_ratio:.2f}), adding black bars")
+            # 计算缩放后的尺寸
+            if img_ratio > video_ratio:
+                # 图片更宽，以宽度为准
+                scale_factor = video_width / img_width
+                if enable_animation:
+                    scale_factor *= 1.2  # 留出缩放空间
+            else:
+                # 图片更高，以高度为准
+                scale_factor = video_height / img_height
+                if enable_animation:
+                    scale_factor *= 1.2  # 留出缩放空间
+            
+            # 创建黑色背景
+            background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(audio_duration)
+            # 将缩放后的图片居中放置
+            final_clip = CompositeVideoClip([background, zoom_clip.with_position("center")])
+        else:
+            # 比例匹配，直接缩放到目标尺寸
+            logger.info(f"  - image ratio matches video ratio, direct resize")
+            final_clip = CompositeVideoClip([zoom_clip.resized((video_width, video_height))])
+        
+        # 优化编码参数以提升速度
+        logger.info(f"  - writing video file (optimized encoding)...")
+        
+        # 使用更快的编码预设
+        output_dir = os.path.dirname(output_path)
+        final_clip.write_videofile(
+            output_path,
+            fps=fps,
+            codec=video_codec,
+            preset='ultrafast',  # 使用最快的编码预设
+            threads=threads,
+            logger=None,
+            audio=False,  # 不包含音频
+            temp_audiofile_path=output_dir,
+            ffmpeg_params=[
+                '-crf', '23',  # 质量参数（18-28，越小质量越好）
+                '-movflags', '+faststart',  # 优化web播放
+            ]
+        )
+        
+        close_clip(clip)
+        close_clip(final_clip)
+        
+        logger.success(f"  ✓ single image video generated: {output_path}")
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"failed to generate video from single image: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
 def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
     if not bgm_type:
         return ""
@@ -123,6 +221,7 @@ def combine_videos(
     video_transition_mode: VideoTransitionMode = None,
     max_clip_duration: int = 5,
     threads: int = 2,
+    enable_animation: bool = False,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     audio_duration = audio_clip.duration
@@ -135,6 +234,23 @@ def combine_videos(
 
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
+    
+    # 优化：检测到单一静态图片资源时，直接生成视频而不走复杂拼接流程
+    if len(video_paths) == 1:
+        single_path = video_paths[0]
+        ext = utils.parse_extension(single_path)
+        if ext in const.FILE_TYPE_IMAGES:
+            logger.info(f"detected single image material, using fast generation path")
+            close_clip(audio_clip)
+            return _generate_video_from_single_image(
+                image_path=single_path,
+                audio_duration=audio_duration,
+                output_path=combined_video_path,
+                video_width=video_width,
+                video_height=video_height,
+                threads=threads,
+                enable_animation=enable_animation
+            )
 
     processed_clips = []
     subclipped_items = []
@@ -219,7 +335,13 @@ def combine_videos(
                 
             # wirte clip to temp file
             clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
-            clip.write_videofile(clip_file, logger=None, fps=fps, codec=video_codec)
+            clip.write_videofile(
+                clip_file, 
+                logger=None, 
+                fps=fps, 
+                codec=video_codec,
+                preset='ultrafast'  # 快速编码
+            )
             
             close_clip(clip)
         
@@ -282,6 +404,7 @@ def combine_videos(
                 temp_audiofile_path=output_dir,
                 audio_codec=audio_codec,
                 fps=fps,
+                preset='ultrafast',  # 快速编码
             )
             close_clip(base_clip)
             close_clip(next_clip)
@@ -384,8 +507,25 @@ def generate_video(
     font_path = ""
     if params.subtitle_enabled:
         if not params.font_name:
-            params.font_name = "STHeitiMedium.ttc"
+            params.font_name = "LXGWWenKai-Regular.ttf"
+        
         font_path = os.path.join(utils.font_dir(), params.font_name)
+        
+        # 如果默认字体不存在，使用备用字体
+        if not os.path.exists(font_path):
+            fallback_fonts = [
+                "STHeitiMedium.ttc",
+                "MicrosoftYaHeiNormal.ttc",
+                "STHeitiLight.ttc",
+            ]
+            for fallback in fallback_fonts:
+                fallback_path = os.path.join(utils.font_dir(), fallback)
+                if os.path.exists(fallback_path):
+                    logger.warning(f"font {params.font_name} not found, using fallback: {fallback}")
+                    font_path = fallback_path
+                    params.font_name = fallback
+                    break
+        
         if os.name == "nt":
             font_path = font_path.replace("\\", "/")
 
@@ -393,8 +533,19 @@ def generate_video(
     
     # 如果没有字体路径但有视频标题，使用默认字体
     if not font_path and params.video_subject:
-        params.font_name = "STHeitiMedium.ttc"
+        params.font_name = "LXGWWenKai-Regular.ttf"
         font_path = os.path.join(utils.font_dir(), params.font_name)
+        
+        # 如果默认字体不存在，使用备用字体
+        if not os.path.exists(font_path):
+            fallback_fonts = ["STHeitiMedium.ttc", "MicrosoftYaHeiNormal.ttc"]
+            for fallback in fallback_fonts:
+                fallback_path = os.path.join(utils.font_dir(), fallback)
+                if os.path.exists(fallback_path):
+                    font_path = fallback_path
+                    params.font_name = fallback
+                    break
+        
         if os.name == "nt":
             font_path = font_path.replace("\\", "/")
 
@@ -426,6 +577,9 @@ def generate_video(
         _clip = _clip.with_duration(duration)
         if params.subtitle_position == "bottom":
             _clip = _clip.with_position(("center", video_height * 0.95 - _clip.h))
+        elif params.subtitle_position == "bottom_20":
+            # 距离底部20%的位置
+            _clip = _clip.with_position(("center", video_height * 0.8 - _clip.h))
         elif params.subtitle_position == "top":
             _clip = _clip.with_position(("center", video_height * 0.05))
         elif params.subtitle_position == "custom":
@@ -455,6 +609,7 @@ def generate_video(
         )
 
     if subtitle_path and os.path.exists(subtitle_path):
+        logger.info(f"  ⑥ adding subtitles...")
         sub = SubtitlesClip(
             subtitles=subtitle_path, encoding="utf-8", make_textclip=make_textclip
         )
@@ -463,8 +618,9 @@ def generate_video(
             clip = create_text_clip(subtitle_item=item)
             text_clips.append(clip)
         video_clip = CompositeVideoClip([video_clip, *text_clips])
+        logger.success(f"  ✓ subtitles added ({len(text_clips)} segments)")
     
-    # 添加视频标题显示（在开头显示3秒）
+    # 添加视频标题显示（全程显示）
     if params.video_subject and font_path:
         try:
             logger.info(f"  ⑥ adding title: {params.video_subject}")
@@ -492,9 +648,8 @@ def generate_video(
                 stroke_width=title_stroke_width,
             )
             
-            # 标题显示3秒，从视频开头开始
-            title_duration = min(3.0, video_clip.duration)  # 最多3秒，不超过视频总长度
-            title_clip = title_clip.with_duration(title_duration)
+            # 标题全程显示，与视频时长一致
+            title_clip = title_clip.with_duration(video_clip.duration)
             title_clip = title_clip.with_start(0)
             
             # 位置：水平居中，垂直位置在画面上方，距离顶部20%处（标题通常位置）
@@ -504,7 +659,7 @@ def generate_video(
             # 将标题叠加到视频上
             video_clip = CompositeVideoClip([video_clip, title_clip])
             
-            logger.success(f"  ✓ title added successfully")
+            logger.success(f"  ✓ title added successfully (full duration)")
         except Exception as e:
             logger.error(f"failed to add title: {str(e)}")
             import traceback
@@ -513,6 +668,7 @@ def generate_video(
     bgm_file = get_bgm_file(bgm_type=params.bgm_type, bgm_file=params.bgm_file)
     if bgm_file:
         try:
+            logger.info(f"  ⑦ adding background music: {os.path.basename(bgm_file)}")
             bgm_clip = AudioFileClip(bgm_file).with_effects(
                 [
                     afx.MultiplyVolume(params.bgm_volume),
@@ -521,10 +677,16 @@ def generate_video(
                 ]
             )
             audio_clip = CompositeAudioClip([audio_clip, bgm_clip])
+            logger.success(f"  ✓ background music added")
         except Exception as e:
             logger.error(f"failed to add bgm: {str(e)}")
-
+    
+    logger.info(f"  ⑧ starting final video encoding (this may take a while)...")
     video_clip = video_clip.with_audio(audio_clip)
+    
+    import time
+    encode_start = time.time()
+    
     video_clip.write_videofile(
         output_file,
         audio_codec=audio_codec,
@@ -532,7 +694,12 @@ def generate_video(
         threads=params.n_threads or 2,
         logger=None,
         fps=fps,
+        preset='ultrafast',  # 快速编码
     )
+    
+    encode_time = time.time() - encode_start
+    logger.success(f"  ✓ final video encoding completed in {encode_time:.1f}s")
+    
     video_clip.close()
     del video_clip
 
@@ -542,6 +709,28 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
         logger.warning("no materials provided for preprocessing")
         return []
     
+    # 优化：如果只有一个图片素材，不需要预处理，直接返回
+    # 将在combine_videos中直接生成视频，避免不必要的转换
+    if len(materials) == 1:
+        material = materials[0]
+        ext = utils.parse_extension(material.url)
+        if ext in const.FILE_TYPE_IMAGES:
+            logger.info(f"detected single image material, skipping preprocessing for optimization")
+            # 验证图片尺寸
+            try:
+                clip = ImageClip(material.url)
+                width, height = clip.size
+                close_clip(clip)
+                if width < 480 or height < 480:
+                    logger.warning(f"low resolution material: {width}x{height}, minimum 480x480 required")
+                    return []
+                logger.success(f"single image material validated: {width}x{height}")
+                return materials  # 直接返回原始图片路径
+            except Exception as e:
+                logger.error(f"failed to validate image: {str(e)}")
+                return []
+    
+    # 多个素材或非图片素材，走原有逻辑
     for material in materials:
         if not material.url:
             continue
@@ -581,7 +770,12 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
 
             # Output the video to a file.
             video_file = f"{material.url}.mp4"
-            final_clip.write_videofile(video_file, fps=30, logger=None)
+            final_clip.write_videofile(
+                video_file, 
+                fps=30, 
+                logger=None,
+                preset='ultrafast'  # 快速编码
+            )
             close_clip(clip)
             material.url = video_file
             logger.success(f"image processed: {video_file}")

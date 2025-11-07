@@ -31,6 +31,8 @@ class VideoAspect(str, Enum):
     landscape = "16:9"
     portrait = "9:16"
     square = "1:1"
+    portrait_720p = "9:16-720p"
+    landscape_720p = "16:9-720p"
 
     def to_resolution(self):
         if self == VideoAspect.landscape.value:
@@ -39,6 +41,10 @@ class VideoAspect(str, Enum):
             return 1080, 1920
         elif self == VideoAspect.square.value:
             return 1080, 1080
+        elif self == VideoAspect.portrait_720p.value:
+            return 720, 1280
+        elif self == VideoAspect.landscape_720p.value:
+            return 1280, 720
         return 1080, 1920
 
 
@@ -76,6 +82,7 @@ class VideoParams(BaseModel):
     video_transition_mode: Optional[VideoTransitionMode] = None
     video_clip_duration: Optional[int] = 5
     video_count: Optional[int] = 1
+    enable_video_animation: Optional[bool] = False  # 启用视频缩放动画效果，默认关闭以提升速度
 
     video_source: Optional[str] = "pexels"
     video_materials: Optional[List[MaterialInfo]] = (
@@ -92,9 +99,9 @@ class VideoParams(BaseModel):
     bgm_volume: Optional[float] = 0.2
 
     subtitle_enabled: Optional[bool] = True
-    subtitle_position: Optional[str] = "bottom"  # top, bottom, center
+    subtitle_position: Optional[str] = "bottom_20"  # top, bottom, bottom_20, center, custom
     custom_position: float = 70.0
-    font_name: Optional[str] = "STHeitiMedium.ttc"
+    font_name: Optional[str] = "LXGWWenKai-Regular.ttf"  # 默认使用霞鹜文楷，如果不存在则回退到STHeitiMedium.ttc
     text_fore_color: Optional[str] = "#FFFFFF"
     text_background_color: Union[bool, str] = True
 

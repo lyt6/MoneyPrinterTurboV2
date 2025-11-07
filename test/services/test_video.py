@@ -37,15 +37,9 @@ class TestVideoService(unittest.TestCase):
         # verify result
         self.assertIsNotNone(materials)
         self.assertEqual(len(materials), 1)
-        self.assertTrue(materials[0].url.endswith(".mp4"))
-        
-        # moviepy get video info
-        clip = VideoFileClip(materials[0].url)
-        print(clip)
-        
-        # clean generated test video file
-        if os.path.exists(materials[0].url):
-            os.remove(materials[0].url)
+        # 优化后：单一图片素材不再预处理，直接返回原图片路径
+        self.assertEqual(materials[0].url, self.test_img_path)
+        print("✓ Single image optimization: skipped preprocessing")
     
     def test_wrap_text(self):
         """test text wrapping function"""
