@@ -27,9 +27,108 @@ from app.models.schema import (
     VideoConcatMode,
     VideoParams,
     VideoTransitionMode,
+    VideoTheme,
 )
 from app.services.utils import video_effects
 from app.utils import utils
+
+# GPU编码器缓存（避免重复检测）
+_gpu_encoder_cache = None
+
+def detect_gpu_encoder():
+    """
+    自动检测GPU编码器，优先使用硬件加速
+    返回: (video_codec, extra_ffmpeg_params)
+    """
+    global _gpu_encoder_cache
+    
+    # 使用缓存结果
+    if _gpu_encoder_cache is not None:
+        return _gpu_encoder_cache
+    
+    import subprocess
+    import platform
+    import shutil
+    
+    # 首先检查ffmpeg是否可用
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        logger.warning("⚠️ 未找到ffmpeg命令，请确保已安装ffmpeg并添加到系统PATH")
+        logger.info("提示：macOS可使用 'brew install ffmpeg' 安装")
+        # 默认使用CPU编码
+        _gpu_encoder_cache = ('libx264', ['-preset', 'ultrafast', '-crf', '23'])
+        return _gpu_encoder_cache
+    
+    try:
+        # 检查ffmpeg支持的编码器
+        result = subprocess.run(
+            [ffmpeg_path, '-hide_banner', '-encoders'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        encoders = result.stdout.lower()
+        
+        system = platform.system()
+        
+        # macOS - VideoToolbox (苹果芯片原生支持)
+        if system == 'Darwin' and 'h264_videotoolbox' in encoders:
+            logger.info("⚡ GPU加速：检测到 VideoToolbox 编码器 (macOS)")
+            _gpu_encoder_cache = ('h264_videotoolbox', [
+                '-allow_sw', '1',  # 如果硬件不可用，允许回退到软件编码
+                '-b:v', '5M',
+            ])
+            return _gpu_encoder_cache
+        
+        # NVIDIA NVENC
+        if 'h264_nvenc' in encoders or 'nvenc' in encoders:
+            logger.info("⚡ GPU加速：检测到 NVIDIA NVENC 编码器")
+            _gpu_encoder_cache = ('h264_nvenc', [
+                '-preset', 'p4',  # p1-p7，p4平衡速度和质量
+                '-b:v', '5M',
+            ])
+            return _gpu_encoder_cache
+        
+        # AMD AMF
+        if 'h264_amf' in encoders or 'amf' in encoders:
+            logger.info("⚡ GPU加速：检测到 AMD AMF 编码器")
+            _gpu_encoder_cache = ('h264_amf', [
+                '-quality', 'speed',
+                '-b:v', '5M',
+            ])
+            return _gpu_encoder_cache
+        
+        # Intel QSV
+        if 'h264_qsv' in encoders or 'qsv' in encoders:
+            logger.info("⚡ GPU加速：检测到 Intel QSV 编码器")
+            _gpu_encoder_cache = ('h264_qsv', [
+                '-preset', 'veryfast',
+                '-b:v', '5M',
+            ])
+            return _gpu_encoder_cache
+        
+        logger.info("ℹ️ 未检测到GPU编码器，使用CPU软编码（性能较慢但兼容性好）")
+        
+    except subprocess.TimeoutExpired:
+        logger.warning("检测GPU编码器超时，使用CPU软编码")
+    except Exception as e:
+        logger.warning(f"检测GPU编码器时出错: {e}，使用CPU软编码")
+    
+    # 默认使用CPU编码
+    _gpu_encoder_cache = ('libx264', ['-preset', 'ultrafast', '-crf', '23'])
+    return _gpu_encoder_cache
+
+
+def get_optimal_threads():
+    """
+    获取最优线程数：CPU核心数 - 1，留一个核心给系统
+    """
+    import multiprocessing
+    cpu_count = multiprocessing.cpu_count()
+    optimal = max(2, cpu_count - 1)
+    logger.info(f"💻 CPU核心数: {cpu_count}，使用线程数: {optimal}")
+    return optimal
+
 
 class SubClippedVideoClip:
     def __init__(self, file_path, start_time=None, end_time=None, width=None, height=None, duration=None):
@@ -167,21 +266,26 @@ def _generate_video_from_single_image(
         # 优化编码参数以提升速度
         logger.info(f"  - writing video file (optimized encoding)...")
         
+        # 检测GPU编码器
+        gpu_codec, gpu_params = detect_gpu_encoder()
+        
         # 使用更快的编码预设
         output_dir = os.path.dirname(output_path)
+        
+        # 构建完整的ffmpeg参数
+        ffmpeg_params = gpu_params + [
+            '-movflags', '+faststart',  # 优化web播放
+        ]
+        
         final_clip.write_videofile(
             output_path,
             fps=fps,
-            codec=video_codec,
-            preset='ultrafast',  # 使用最快的编码预设
+            codec=gpu_codec,  # 使用GPU编码器
             threads=threads,
             logger=None,
             audio=False,  # 不包含音频
             temp_audiofile_path=output_dir,
-            ffmpeg_params=[
-                '-crf', '23',  # 质量参数（18-28，越小质量越好）
-                '-movflags', '+faststart',  # 优化web播放
-            ]
+            ffmpeg_params=ffmpeg_params
         )
         
         close_clip(clip)
@@ -208,8 +312,59 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
         song_dir = utils.song_dir()
         files = glob.glob(os.path.join(song_dir, suffix))
         return random.choice(files)
+    
+    if bgm_type == "white_noise":
+        # 生成白噪音文件
+        return _generate_white_noise()
 
     return ""
+
+
+def _generate_white_noise(duration=60, sample_rate=44100):
+    """
+    生成白噪音音频文件
+    使用FFmpeg生成白噪音，避免额外依赖
+    
+    Args:
+        duration: 白噪音时长（秒），默认60秒，足够循环使用
+        sample_rate: 采样率
+    
+    Returns:
+        str: 白噪音文件路径
+    """
+    output_dir = utils.storage_dir("bgm", create=True)
+    white_noise_file = os.path.join(output_dir, "white_noise.mp3")
+    
+    # 如果白噪音文件已存在，直接返回
+    if os.path.exists(white_noise_file):
+        logger.info(f"🎵 using existing white noise file: {white_noise_file}")
+        return white_noise_file
+    
+    try:
+        import subprocess
+        logger.info(f"🎵 generating white noise ({duration}s)...")
+        
+        # 使用FFmpeg生成白噪音
+        # anoisesrc 滤镜生成白噪音
+        cmd = [
+            "ffmpeg",
+            "-f", "lavfi",
+            "-i", f"anoisesrc=duration={duration}:sample_rate={sample_rate}:amplitude=0.1",
+            "-ac", "2",  # 立体声
+            "-y",
+            white_noise_file
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            logger.success(f"✅ white noise generated: {white_noise_file}")
+            return white_noise_file
+        else:
+            logger.error(f"❌ failed to generate white noise: {result.stderr}")
+            return ""
+    except Exception as e:
+        logger.error(f"❌ white noise generation failed: {str(e)}")
+        return ""
 
 
 def combine_videos(
@@ -335,12 +490,16 @@ def combine_videos(
                 
             # wirte clip to temp file
             clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
+            
+            # 检测GPU编码器
+            gpu_codec, gpu_params = detect_gpu_encoder()
+            
             clip.write_videofile(
                 clip_file, 
                 logger=None, 
                 fps=fps, 
-                codec=video_codec,
-                preset='ultrafast'  # 快速编码
+                codec=gpu_codec,
+                ffmpeg_params=gpu_params
             )
             
             close_clip(clip)
@@ -396,6 +555,9 @@ def combine_videos(
             # merge these two clips
             merged_clip = concatenate_videoclips([base_clip, next_clip])
 
+            # 检测GPU编码器
+            gpu_codec, gpu_params = detect_gpu_encoder()
+            
             # save merged result to temp file
             merged_clip.write_videofile(
                 filename=temp_merged_next,
@@ -404,7 +566,8 @@ def combine_videos(
                 temp_audiofile_path=output_dir,
                 audio_codec=audio_codec,
                 fps=fps,
-                preset='ultrafast',  # 快速编码
+                codec=gpu_codec,
+                ffmpeg_params=gpu_params
             )
             close_clip(base_clip)
             close_clip(next_clip)
@@ -481,6 +644,458 @@ def wrap_text(text, max_width, font="Arial", fontsize=60):
     result = "\n".join(_wrapped_lines_).strip()
     height = len(_wrapped_lines_) * height
     return result, height
+
+
+def create_bamboo_scroll_subtitles(
+    subtitle_items,
+    font_path,
+    font_size,
+    video_width,
+    video_height,
+    text_color="#FFD700",
+    stroke_color="#8B4513",
+    stroke_width=2,
+    video_duration=None,
+    x_offset=0,
+    y_offset=0
+):
+    """
+    创建竖简式多列字幕布局（古书卷轴模式）
+    
+    特点：
+    1. 从右向左排列多列
+    2. 每列从上到下填充
+    3. 根据屏幕高度和字体大小计算每列最大字数
+    4. 自动计算可容纳列数
+    5. 三色高亮：未读（灰色）、正在读（金色）、已读（棕色）
+    
+    参数:
+        x_offset: 水平偏移量（百分比）
+        y_offset: 垂直偏移量（百分比）
+    """
+    font_size = int(font_size)
+    stroke_width = int(stroke_width)
+    
+    if video_duration is None:
+        video_duration = subtitle_items[-1][0][1] if subtitle_items else 10
+    
+    # 根据记忆中的规范：字幕区域 22%-65%，与标题上边界对齐 12%
+    # 应用水平和垂直偏移量
+    base_left = 0.22 + (x_offset / 100.0)
+    base_right = 0.65 + (x_offset / 100.0)
+    base_y = 0.12 + (y_offset / 100.0)
+    
+    left_boundary = int(video_width * base_left)   # 左边界
+    right_boundary = int(video_width * base_right)  # 右边界
+    y_start = int(video_height * base_y)            # 上边界
+    
+    # 计算每列可容纳的最大字数（根据记忆：字符间距 = 字体大小 + 8像素）
+    char_spacing = font_size + 8
+    available_height = video_height * 0.76  # 12%-88%区域
+    max_chars_per_column = int(available_height / char_spacing)
+    
+    # 计算列间距（根据记忆：字体大小的 2.2 倍）
+    column_spacing = int(font_size * 2.2)
+    
+    # 计算可容纳的总列数
+    available_width = right_boundary - left_boundary
+    max_columns = int(available_width / column_spacing)
+    
+    logger.info(f"🎋 竖简布局: 每列{max_chars_per_column}字, 最多{max_columns}列, 区域{left_boundary}-{right_boundary}px, Y偏移{y_offset}%")
+    
+    all_clips = []
+    
+    # 将所有字幕文本连接起来
+    all_text = "".join([item[1].strip() for item in subtitle_items])
+    total_chars = len(all_text)
+    
+    # 计算字符到时间的映射
+    char_to_time = {}
+    char_index = 0
+    for item in subtitle_items:
+        start_time, end_time = item[0]
+        text = item[1].strip()
+        duration = end_time - start_time
+        char_duration = duration / len(text) if len(text) > 0 else duration
+        
+        for i, char in enumerate(text):
+            char_start = start_time + i * char_duration
+            char_end = char_start + char_duration
+            char_to_time[char_index] = (char_start, char_end)
+            char_index += 1
+    
+    # 从右向左排列字符
+    char_index = 0
+    for col in range(max_columns):
+        if char_index >= total_chars:
+            break
+        
+        # 计算当前列的 x 位置（从右到左）
+        x_position = right_boundary - col * column_spacing
+        
+        # 填充当前列
+        for row in range(max_chars_per_column):
+            if char_index >= total_chars:
+                break
+            
+            char = all_text[char_index]
+            char_start, char_end = char_to_time[char_index]
+            
+            # 计算 y 位置
+            y_position = y_start + row * char_spacing
+            
+            # 确定字符状态：未读（灰色）、正在读（金色）、已读（棕色）
+            # 未读状态：从视频开始到当前字开始
+            unread_clip = TextClip(
+                text=char,
+                font=font_path,
+                font_size=font_size,
+                color="#808080",  # 灰色
+                stroke_color=stroke_color,
+                stroke_width=stroke_width,
+            )
+            unread_clip = unread_clip.with_start(0).with_duration(char_start)
+            unread_clip = unread_clip.with_position((x_position, y_position))
+            if char_start > 0:
+                all_clips.append(unread_clip)
+            
+            # 正在读状态：当前字正在朗读时
+            reading_clip = TextClip(
+                text=char,
+                font=font_path,
+                font_size=int(font_size * 1.1),  # 略微放大
+                color="#FFD700",  # 金色高亮
+                stroke_color="#8B4513",  # 棕色描边
+                stroke_width=stroke_width,
+            )
+            reading_clip = reading_clip.with_start(char_start).with_duration(char_end - char_start)
+            reading_clip = reading_clip.with_position((x_position, y_position))
+            all_clips.append(reading_clip)
+            
+            # 已读状态：当前字读完到视频结束
+            read_clip = TextClip(
+                text=char,
+                font=font_path,
+                font_size=font_size,
+                color="#8B4513",  # 棕色
+                stroke_color="#FFD700",  # 金色描边
+                stroke_width=stroke_width,
+            )
+            read_clip = read_clip.with_start(char_end).with_duration(video_duration - char_end)
+            read_clip = read_clip.with_position((x_position, y_position))
+            if char_end < video_duration:
+                all_clips.append(read_clip)
+            
+            char_index += 1
+    
+    logger.success(f"✅ 竖简字幕生成完成: {len(all_clips)} 个clip, {char_index} 个字符")
+    return all_clips
+
+
+def create_accumulated_subtitles_for_book_theme(subtitle_items, font_path, font_size, 
+                                                 video_width, video_height, theme,
+                                                 text_color="#000000", stroke_color="#FFFFFF", 
+                                                 stroke_width=2, video_duration=None,
+                                                 subtitle_x_offset=0, subtitle_y_offset=0):
+    """
+    为书籍主题创建追加显示的字幕，当满屏后清空继续显示
+    
+    Args:
+        subtitle_x_offset: 字幕水平偏移量（百分比）
+        subtitle_y_offset: 字幕垂直偏移量（百分比）
+    """
+    font_size = int(font_size)
+    stroke_width = int(stroke_width)
+    
+    # 计算视频总时长（如果没有提供，使用最后一个字幕的结束时间）
+    if video_duration is None:
+        video_duration = subtitle_items[-1][0][1] if subtitle_items else 10
+    
+    all_clips = []
+    
+    if theme == VideoTheme.ancient_scroll.value:
+        # 古书卷轴：使用竖简式多列布局
+        # 使用传入的偏移量参数
+        return create_bamboo_scroll_subtitles(
+            subtitle_items=subtitle_items,
+            font_path=font_path,
+            font_size=font_size,
+            video_width=video_width,
+            video_height=video_height,
+            text_color=text_color,
+            stroke_color=stroke_color,
+            stroke_width=stroke_width,
+            video_duration=video_duration,
+            x_offset=subtitle_x_offset,
+            y_offset=subtitle_y_offset
+        )
+    else:  # modern_book
+        # 现代图书：横排追加
+        x_start = int(video_width * 0.1)
+        y_start = int(video_height * 0.3)  # 从30%开始，留出标题空间
+        line_height = int(font_size * 1.5)
+        max_lines_per_screen = int((video_height * 0.6) / line_height)  # 每屏最多行数
+        max_width = int(video_width * 0.8)
+        
+        accumulated_lines = []
+        page_start_time = 0
+        
+        for idx, item in enumerate(subtitle_items):
+            start_time, end_time = item[0]
+            text = item[1].strip()
+            
+            # 计算下一个字幕的开始时间（用于设置当前clip的结束时间）
+            next_start_time = subtitle_items[idx + 1][0][0] if idx + 1 < len(subtitle_items) else video_duration
+            
+            # 添加当前文本到累积行
+            accumulated_lines.append((text, start_time, end_time, next_start_time))
+            
+            # 检查是否需要翻页
+            if len(accumulated_lines) > max_lines_per_screen:
+                # 清空当前页，开始新页
+                accumulated_lines = [(text, start_time, end_time, next_start_time)]
+                page_start_time = start_time
+            
+            # 创建当前页面所有行的clips
+            for line_idx, (line_text, line_start, line_end, line_next_start) in enumerate(accumulated_lines):
+                y_position = int(y_start + line_idx * line_height)
+                
+                # 当前正在显示的行使用黑色，已显示的行使用灰色
+                if line_start == start_time:
+                    # 当前行：黑色
+                    line_color = "#000000"
+                else:
+                    # 之前的行：深灰色
+                    line_color = "#404040"
+                
+                # 自动换行
+                wrapped_text, _ = wrap_text(
+                    line_text,
+                    max_width=max_width,
+                    font=font_path,
+                    fontsize=font_size
+                )
+                
+                line_clip = TextClip(
+                    text=wrapped_text,
+                    font=font_path,
+                    font_size=font_size,
+                    color=line_color,
+                    stroke_color=stroke_color,
+                    stroke_width=stroke_width,
+                )
+                
+                # 从该行开始显示到下一段落开始
+                line_clip = line_clip.with_start(line_start)
+                line_clip = line_clip.with_duration(line_next_start - line_start)
+                line_clip = line_clip.with_position((x_start, y_position))
+                all_clips.append(line_clip)
+    
+    return all_clips
+
+
+def create_vertical_text_clips(text, font_path, font_size, video_width, video_height, 
+                               start_time, end_time, text_color="#FFFFFF", 
+                               stroke_color="#000000", stroke_width=2):
+    """
+    创建竖排字幕，用于古书卷轴模式
+    字符逐个竖排显示，并在读到时高亮
+    """
+    chars = list(text.strip())
+    char_clips = []
+    
+    # 确保参数为整数
+    font_size = int(font_size)
+    stroke_width = int(stroke_width)
+    
+    # 计算总时长和每个字的显示时间
+    total_duration = end_time - start_time
+    char_duration = total_duration / len(chars) if len(chars) > 0 else total_duration
+    
+    # 计算竖排字幕的位置（右侧，留出空间给标题）
+    x_position = int(video_width * 0.75)  # 在右侧四分之三处
+    y_start = int(video_height * 0.15)  # 从顶部15%开始
+    
+    for i, char in enumerate(chars):
+        char_start = start_time + i * char_duration
+        char_end = char_start + char_duration
+        
+        # 为每个字创建两个状态：普通和高亮
+        # 普通状态：白色
+        normal_clip = TextClip(
+            text=char,
+            font=font_path,
+            font_size=font_size,
+            color=text_color,
+            stroke_color=stroke_color,
+            stroke_width=stroke_width,
+        )
+        
+        # 高亮状态：金色
+        highlight_clip = TextClip(
+            text=char,
+            font=font_path,
+            font_size=int(font_size * 1.1),  # 略微放大
+            color="#FFD700",  # 金色
+            stroke_color="#8B4513",  # 棕色描边
+            stroke_width=stroke_width,
+        )
+        
+        # 计算y位置
+        y_position = int(y_start + i * (font_size + 10))
+        
+        # 普通状态显示在整个字幕期间
+        normal_clip = normal_clip.with_start(start_time).with_duration(total_duration)
+        normal_clip = normal_clip.with_position((x_position, y_position))
+        
+        # 高亮状态只在读到这个字时显示
+        highlight_clip = highlight_clip.with_start(char_start).with_duration(char_duration)
+        highlight_clip = highlight_clip.with_position((x_position, y_position))
+        
+        char_clips.append(normal_clip)
+        char_clips.append(highlight_clip)
+    
+    return char_clips
+
+
+def create_title_clips_for_theme(theme, title_text, font_path, video_width, video_height, 
+                                  video_duration, base_font_size=60, stroke_width=2, 
+                                  title_x_offset=0, title_y_offset=0):
+    """
+    根据主题创建标题文本块
+    
+    参数:
+        title_x_offset: 标题水平偏移量（百分比）
+        title_y_offset: 标题垂直偏移量（百分比）
+    """
+    # 确保参数为整数
+    base_font_size = int(base_font_size)
+    stroke_width = int(stroke_width)
+    
+    if theme == VideoTheme.cinema.value:
+        # 电影模式：开头全屏显示3秒，居中，大字体
+        title_font_size = int(base_font_size * 2.5)
+        title_stroke_width = int(stroke_width * 2)
+        
+        # 自动换行
+        max_title_width = video_width * 0.8
+        wrapped_title, title_height = wrap_text(
+            title_text,
+            max_width=max_title_width,
+            font=font_path,
+            fontsize=title_font_size
+        )
+        
+        title_clip = TextClip(
+            text=wrapped_title,
+            font=font_path,
+            font_size=title_font_size,
+            color="#FFFFFF",
+            stroke_color="#000000",
+            stroke_width=title_stroke_width,
+        )
+        
+        # 开头显示3秒，居中
+        title_clip = title_clip.with_duration(3)
+        title_clip = title_clip.with_start(0)
+        title_clip = title_clip.with_position(("center", "center"))
+        
+        return [title_clip]
+        
+    elif theme == VideoTheme.ancient_scroll.value:
+        # 古书卷轴：右上角竖排，全程显示（根据记忆：75%位置，12%上边界）
+        # 应用水平和垂直偏移量
+        title_font_size = int(base_font_size * 1.2)
+        title_stroke_width = int(stroke_width * 1.5)
+        
+        # 将标题文字竖排
+        chars = list(title_text)
+        char_clips = []
+        
+        # 应用偏移量（百分比）
+        base_x = 0.75 + (title_x_offset / 100.0)
+        base_y = 0.12 + (title_y_offset / 100.0)
+        
+        x_position = int(video_width * base_x)   # 75%位置 + 偏移，与字幕区域协调
+        y_start = int(video_height * base_y)      # 12%上边界 + 偏移，与字幕对齐
+        
+        logger.info(f"🎋 古书卷轴标题: X={base_x*100:.1f}%, Y={base_y*100:.1f}%")
+        
+        for i, char in enumerate(chars):
+            char_clip = TextClip(
+                text=char,
+                font=font_path,
+                font_size=title_font_size,
+                color="#8B4513",  # 棕色，古书效果
+                stroke_color="#FFD700",  # 金色描边
+                stroke_width=title_stroke_width,
+            )
+            
+            y_position = int(y_start + i * (title_font_size + 5))
+            char_clip = char_clip.with_duration(video_duration)
+            char_clip = char_clip.with_start(0)
+            char_clip = char_clip.with_position((x_position, y_position))
+            char_clips.append(char_clip)
+        
+        return char_clips
+        
+    elif theme == VideoTheme.minimal.value:
+        # 简约模式：居中靠上，全程显示
+        title_font_size = int(base_font_size * 1.8)
+        title_stroke_width = int(stroke_width * 1.5)
+        
+        max_title_width = video_width * 0.8
+        wrapped_title, title_height = wrap_text(
+            title_text,
+            max_width=max_title_width,
+            font=font_path,
+            fontsize=title_font_size
+        )
+        
+        title_clip = TextClip(
+            text=wrapped_title,
+            font=font_path,
+            font_size=title_font_size,
+            color="#FFFFFF",
+            stroke_color="#000000",
+            stroke_width=title_stroke_width,
+        )
+        
+        title_clip = title_clip.with_duration(video_duration)
+        title_clip = title_clip.with_start(0)
+        # 顶部10%处
+        title_clip = title_clip.with_position(("center", int(video_height * 0.1)))
+        
+        return [title_clip]
+        
+    else:  # modern_book 或默认
+        # 现代图书模式：顶部居中（书皮），全程显示
+        title_font_size = int(base_font_size * 1.5)
+        title_stroke_width = int(stroke_width * 1.5)
+        
+        max_title_width = video_width * 0.8
+        wrapped_title, title_height = wrap_text(
+            title_text,
+            max_width=max_title_width,
+            font=font_path,
+            fontsize=title_font_size
+        )
+        
+        title_clip = TextClip(
+            text=wrapped_title,
+            font=font_path,
+            font_size=title_font_size,
+            color="#000000",  # 黑色标题
+            stroke_color="#FFFFFF",  # 白色描边
+            stroke_width=title_stroke_width,
+        )
+        
+        title_clip = title_clip.with_duration(video_duration)
+        title_clip = title_clip.with_start(0)
+        # 顶部20%处
+        title_clip = title_clip.with_position(("center", int(video_height * 0.2)))
+        
+        return [title_clip]
 
 
 def generate_video(
@@ -609,57 +1224,74 @@ def generate_video(
         )
 
     if subtitle_path and os.path.exists(subtitle_path):
-        logger.info(f"  ⑥ adding subtitles...")
+        logger.info(f"  ⑥ adding subtitles (theme: {params.video_theme})...")
         sub = SubtitlesClip(
             subtitles=subtitle_path, encoding="utf-8", make_textclip=make_textclip
         )
         text_clips = []
-        for item in sub.subtitles:
-            clip = create_text_clip(subtitle_item=item)
-            text_clips.append(clip)
+        
+        # 根据主题选择不同的字幕样式
+        theme = params.video_theme if hasattr(params, 'video_theme') else VideoTheme.modern_book.value
+        
+        if theme == VideoTheme.ancient_scroll.value or theme == VideoTheme.modern_book.value:
+            # 古书卷轴和现代图书模式：使用追加显示，满屏后翻页
+            logger.info(f"  using accumulated subtitle display with page turning")
+            
+            # 获取字幕偏移量参数（如果有）
+            subtitle_x_offset = getattr(params, 'subtitle_x_offset', 0)
+            subtitle_y_offset = getattr(params, 'subtitle_y_offset', 0)
+            
+            text_clips = create_accumulated_subtitles_for_book_theme(
+                subtitle_items=sub.subtitles,
+                font_path=font_path,
+                font_size=params.font_size,
+                video_width=video_width,
+                video_height=video_height,
+                theme=theme,
+                text_color="#000000" if theme == VideoTheme.modern_book.value else params.text_fore_color,
+                stroke_color=params.stroke_color,
+                stroke_width=params.stroke_width,
+                video_duration=video_clip.duration,
+                subtitle_x_offset=subtitle_x_offset,
+                subtitle_y_offset=subtitle_y_offset
+            )
+        else:
+            # 其他模式：使用传统横排字幕
+            for item in sub.subtitles:
+                clip = create_text_clip(subtitle_item=item)
+                text_clips.append(clip)
+        
         video_clip = CompositeVideoClip([video_clip, *text_clips])
-        logger.success(f"  ✓ subtitles added ({len(text_clips)} segments)")
+        logger.success(f"  ✓ subtitles added ({len(text_clips)} clips)")        
     
-    # 添加视频标题显示（全程显示）
+    # 添加视频标题显示（根据主题）
     if params.video_subject and font_path:
         try:
-            logger.info(f"  ⑥ adding title: {params.video_subject}")
+            theme = params.video_theme if hasattr(params, 'video_theme') else VideoTheme.modern_book.value
+            logger.info(f"  ⑦ adding title: {params.video_subject} (theme: {theme})")
             
-            # 标题字体大小比字幕更大
-            title_font_size = int(params.font_size * 1.5)
-            title_stroke_width = int(params.stroke_width * 1.5)
+            # 获取标题偏移量参数（如果有）
+            title_x_offset = getattr(params, 'title_x_offset', 0)
+            title_y_offset = getattr(params, 'title_y_offset', 0)
             
-            # 自动换行
-            max_title_width = video_width * 0.8
-            wrapped_title, title_height = wrap_text(
-                params.video_subject,
-                max_width=max_title_width,
-                font=font_path,
-                fontsize=title_font_size
+            # 根据主题创建标题
+            title_clips = create_title_clips_for_theme(
+                theme=theme,
+                title_text=params.video_subject,
+                font_path=font_path,
+                video_width=video_width,
+                video_height=video_height,
+                video_duration=video_clip.duration,
+                base_font_size=params.font_size,
+                stroke_width=params.stroke_width,
+                title_x_offset=title_x_offset,
+                title_y_offset=title_y_offset
             )
-            
-            # 创建标题文本
-            title_clip = TextClip(
-                text=wrapped_title,
-                font=font_path,
-                font_size=title_font_size,
-                color="#FFFFFF",
-                stroke_color="#000000",
-                stroke_width=title_stroke_width,
-            )
-            
-            # 标题全程显示，与视频时长一致
-            title_clip = title_clip.with_duration(video_clip.duration)
-            title_clip = title_clip.with_start(0)
-            
-            # 位置：水平居中，垂直位置在画面上方，距离顶部20%处（标题通常位置）
-            title_y_position = int(video_height * 0.2)
-            title_clip = title_clip.with_position(("center", title_y_position))
             
             # 将标题叠加到视频上
-            video_clip = CompositeVideoClip([video_clip, title_clip])
+            video_clip = CompositeVideoClip([video_clip, *title_clips])
             
-            logger.success(f"  ✓ title added successfully (full duration)")
+            logger.success(f"  ✓ title added successfully ({len(title_clips)} clips, theme: {theme})")
         except Exception as e:
             logger.error(f"failed to add title: {str(e)}")
             import traceback
@@ -687,14 +1319,26 @@ def generate_video(
     import time
     encode_start = time.time()
     
+    # 检测GPU编码器
+    gpu_codec, gpu_params = detect_gpu_encoder()
+    
+    # 使用最优线程数
+    optimal_threads = params.n_threads if params.n_threads else get_optimal_threads()
+    
+    # 构建完整的ffmpeg参数
+    ffmpeg_params = gpu_params + [
+        '-movflags', '+faststart',
+    ]
+    
     video_clip.write_videofile(
         output_file,
         audio_codec=audio_codec,
+        codec=gpu_codec,  # 使用GPU编码器
         temp_audiofile_path=output_dir,
-        threads=params.n_threads or 2,
+        threads=optimal_threads,
         logger=None,
         fps=fps,
-        preset='ultrafast',  # 快速编码
+        ffmpeg_params=ffmpeg_params
     )
     
     encode_time = time.time() - encode_start
@@ -770,11 +1414,16 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
 
             # Output the video to a file.
             video_file = f"{material.url}.mp4"
+            
+            # 检测GPU编码器
+            gpu_codec, gpu_params = detect_gpu_encoder()
+            
             final_clip.write_videofile(
                 video_file, 
                 fps=30, 
                 logger=None,
-                preset='ultrafast'  # 快速编码
+                codec=gpu_codec,
+                ffmpeg_params=gpu_params
             )
             close_clip(clip)
             material.url = video_file

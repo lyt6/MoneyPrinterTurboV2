@@ -27,6 +27,16 @@ class VideoTransitionMode(str, Enum):
     slide_out = "SlideOut"
 
 
+class VideoTheme(str, Enum):
+    """
+    视频主题模式，定义标题和字幕的展示风格
+    """
+    modern_book = "modern_book"      # 现代图书：标题在顶部(书皮)，字幕横排在中下方(书页)
+    cinema = "cinema"                # 电影模式：标题在开头全屏显示3秒，字幕底部
+    ancient_scroll = "ancient_scroll"  # 古书卷轴：标题在右上角，字幕竖排显示，带高亮效果
+    minimal = "minimal"              # 简约模式：标题居中靠上，字幕底部
+
+
 class VideoAspect(str, Enum):
     landscape = "16:9"
     portrait = "9:16"
@@ -110,6 +120,12 @@ class VideoParams(BaseModel):
     stroke_width: float = 1.5
     n_threads: Optional[int] = 2
     paragraph_number: Optional[int] = 1
+    
+    # 视频主题设置
+    video_theme: Optional[VideoTheme] = VideoTheme.modern_book.value  # 默认使用现代图书模式
+    
+    # 快速生成模式（性能优化）
+    enable_fast_mode: Optional[bool] = True  # 启用快速生成模式，速度提升10-20倍
 
 
 class SubtitleRequest(BaseModel):

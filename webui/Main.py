@@ -911,6 +911,7 @@ with middle_panel:
         bgm_options = [
             (tr("No Background Music"), ""),
             (tr("Random Background Music"), "random"),
+            (tr("White Noise"), "white_noise"),
             (tr("Custom Background Music"), "custom"),
         ]
         selected_index = st.selectbox(
@@ -943,7 +944,546 @@ with middle_panel:
 with right_panel:
     with st.container(border=True):
         st.write(tr("Subtitle Settings"))
-        params.subtitle_enabled = st.checkbox(tr("Enable Subtitles"), value=True)
+        params.subtitle_enabled = st.checkbox(
+            tr("Enable Subtitles"), 
+            value=True,
+            help="启用后将显示字幕，并应用下方的所有设置（主题、布局、字体、颜色、描边等）"
+        )
+        
+        if not params.subtitle_enabled:
+            st.warning("⚠️ 已禁用字幕，下方的所有字幕设置将不生效")
+        
+        # 视频主题选择
+        video_themes = [
+            (tr("Modern Book"), "modern_book"),       # 现代图书：标题在顶部，字幕横排底部
+            (tr("Cinema"), "cinema"),                 # 电影模式：标题开头全屏3秒，字幕底部
+            (tr("Ancient Scroll"), "ancient_scroll"), # 古书卷轴：标题右上角，字幕竖排高亮
+            (tr("Minimal"), "minimal"),               # 简约模式：标题居中靠上，字幕底部
+        ]
+        saved_theme_index = 0  # 默认选择现代图书模式
+        saved_theme = config.ui.get("video_theme", "modern_book")
+        for i, (_, theme_value) in enumerate(video_themes):
+            if theme_value == saved_theme:
+                saved_theme_index = i
+                break
+        
+        selected_theme_index = st.selectbox(
+            tr("Video Theme"),
+            options=range(len(video_themes)),
+            index=saved_theme_index,
+            format_func=lambda x: video_themes[x][0],
+            help=tr("Choose theme style for title and subtitle display")
+        )
+        params.video_theme = video_themes[selected_theme_index][1]
+        config.ui["video_theme"] = params.video_theme
+        
+        # 主题默认颜色配置
+        theme_color_defaults = {
+            "modern_book": {
+                "text_fore_color": "#000000",  # 黑色字体（书页效果）
+                "stroke_color": "#FFFFFF",     # 白色描边
+            },
+            "ancient_scroll": {
+                "text_fore_color": "#FFD700",  # 金色字体（古卷效果）
+                "stroke_color": "#8B4513",     # 棕色描边
+            },
+            "cinema": {
+                "text_fore_color": "#FFFFFF",  # 白色字体（电影效果）
+                "stroke_color": "#000000",     # 黑色描边
+            },
+            "minimal": {
+                "text_fore_color": "#FFFFFF",  # 白色字体（简洁效果）
+                "stroke_color": "#000000",     # 黑色描边
+            },
+        }
+        
+        # 初始化主题颜色状态（用于检测主题切换）
+        if "current_theme" not in st.session_state:
+            st.session_state.current_theme = params.video_theme
+        
+        # 检测主题是否切换
+        theme_changed = st.session_state.current_theme != params.video_theme
+        if theme_changed:
+            st.session_state.current_theme = params.video_theme
+            # 主题切换时，使用新主题的默认颜色
+            theme_defaults = theme_color_defaults.get(params.video_theme, theme_color_defaults["minimal"])
+            st.session_state.text_fore_color = theme_defaults["text_fore_color"]
+            st.session_state.stroke_color = theme_defaults["stroke_color"]
+            # 更新配置
+            config.ui["text_fore_color"] = st.session_state.text_fore_color
+            config.ui["stroke_color"] = st.session_state.stroke_color
+            # 显示提示
+            st.info(f"🎨 主题切换：字体颜色和描边颜色已更新为 {params.video_theme} 主题默认值")
+        
+        # 根据主题显示说明
+        theme_descriptions = {
+            "modern_book": tr("Modern Book: Title at top (book cover), horizontal subtitles at bottom (book pages)"),
+            "cinema": tr("Cinema: Title fullscreen for 3s at start, subtitles at bottom"),
+            "ancient_scroll": tr("Ancient Scroll: Vertical title at top-right, vertical subtitles with highlight effect"),
+            "minimal": tr("Minimal: Title centered at top, subtitles at bottom"),
+        }
+        st.caption(theme_descriptions.get(params.video_theme, ""))
+        
+        # 🎨 主题布局预览
+        st.write("**" + tr("Layout Preview") + "**")
+        
+        # 根据视频比例确定预览容器尺寸
+        aspect = params.video_aspect
+        if aspect == "9:16":  # 竖屏
+            preview_width = 270
+            preview_height = 480
+        else:  # 16:9 横屏
+            preview_width = 480
+            preview_height = 270
+        
+        # 获取或初始化布局参数
+        if "title_y_offset" not in st.session_state:
+            st.session_state.title_y_offset = 0
+        if "subtitle_y_offset" not in st.session_state:
+            st.session_state.subtitle_y_offset = 0
+        if "title_x_offset" not in st.session_state:
+            st.session_state.title_x_offset = 0
+        if "subtitle_x_offset" not in st.session_state:
+            st.session_state.subtitle_x_offset = 0
+        
+        # 初始化边界参数（与偏移量分开）
+        if "title_top" not in st.session_state:
+            st.session_state.title_top = 12  # 标题默认上边界
+        if "title_left" not in st.session_state:
+            st.session_state.title_left = 75  # 标题默认左边界
+        if "subtitle_top" not in st.session_state:
+            st.session_state.subtitle_top = 12  # 字幕默认上边界
+        if "subtitle_bottom" not in st.session_state:
+            st.session_state.subtitle_bottom = 88  # 字幕默认下边界（88%，即距顶部88%）
+        if "subtitle_left" not in st.session_state:
+            st.session_state.subtitle_left = 22  # 字幕默认左边界
+        if "subtitle_right" not in st.session_state:
+            st.session_state.subtitle_right = 65  # 字幕默认右边界
+        
+        # 根据不同主题显示不同的布局调节选项
+        if params.video_theme == "ancient_scroll":
+            # 古书卷轴：支持水平和垂直位置调整
+            st.caption("🎋 " + tr("Ancient Scroll Layout: Title at 75% horizontal, Subtitle columns 22%-65%"))
+            
+            # 显示调节模式选择
+            layout_mode = st.radio(
+                "布局调节模式",
+                ["偏移量模式", "精确边界模式"],
+                horizontal=True,
+                help="偏移量模式：在基础位置上微调。精确边界模式：直接设置精确边界位置"
+            )
+            
+            if layout_mode == "偏移量模式":
+                # 原有的偏移量模式
+                # 水平位置调节
+                col1, col2 = st.columns(2)
+                with col1:
+                    title_x_offset = st.slider(
+                        tr("Title Horizontal Offset (%)"),
+                        min_value=-10,
+                        max_value=10,
+                        value=st.session_state.title_x_offset,
+                        step=1,
+                        key="theme_title_x_offset",
+                        help=tr("Adjust title horizontal position. Base position: 75%")
+                    )
+                    st.session_state.title_x_offset = title_x_offset
+                
+                with col2:
+                    subtitle_x_offset = st.slider(
+                        tr("Subtitle Horizontal Offset (%)"),
+                        min_value=-10,
+                        max_value=10,
+                        value=st.session_state.subtitle_x_offset,
+                        step=1,
+                        key="theme_subtitle_x_offset",
+                        help=tr("Adjust subtitle horizontal position. Base: 22%-65%")
+                    )
+                    st.session_state.subtitle_x_offset = subtitle_x_offset
+                
+                # 垂直位置调节
+                col3, col4 = st.columns(2)
+                with col3:
+                    title_offset = st.slider(
+                        tr("Title Vertical Offset (%)"),
+                        min_value=-20,
+                        max_value=20,
+                        value=st.session_state.title_y_offset,
+                        step=5,
+                        key="theme_title_offset",
+                        help=tr("Adjust title vertical position. Base position: 12%")
+                    )
+                    st.session_state.title_y_offset = title_offset
+                
+                with col4:
+                    subtitle_offset = st.slider(
+                        tr("Subtitle Vertical Offset (%)"),
+                        min_value=-20,
+                        max_value=20,
+                        value=st.session_state.subtitle_y_offset,
+                        step=5,
+                        key="theme_subtitle_offset",
+                        help=tr("Adjust subtitle vertical position. Base position: 12%")
+                    )
+                    st.session_state.subtitle_y_offset = subtitle_offset
+                
+                # 显示实际位置
+                actual_title_x = 75 + title_x_offset
+                actual_title_y = 12 + title_offset
+                actual_subtitle_left = 22 + subtitle_x_offset
+                actual_subtitle_right = 65 + subtitle_x_offset
+                actual_subtitle_y = 12 + subtitle_offset
+                st.info(
+                    f"📍 {tr('Actual positions')}: "
+                    f"{tr('Title')} ({actual_title_x}%, {actual_title_y}%), "
+                    f"{tr('Subtitle')} ({actual_subtitle_left}%-{actual_subtitle_right}%, {actual_subtitle_y}%)"
+                )
+                
+                # 使用偏移量计算边界
+                st.session_state.title_left = 75 + title_x_offset
+                st.session_state.title_top = 12 + title_offset
+                st.session_state.subtitle_left = 22 + subtitle_x_offset
+                st.session_state.subtitle_right = 65 + subtitle_x_offset
+                st.session_state.subtitle_top = 12 + subtitle_offset
+                
+            else:  # 精确边界模式
+                st.caption("📏 直接设置边界位置（百分比）")
+                
+                # 标题边界设置
+                st.markdown("**标题边界**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    title_left = st.slider(
+                        "标题左边界 (%)",
+                        min_value=60,
+                        max_value=95,
+                        value=st.session_state.title_left,
+                        step=1,
+                        key="title_left_boundary",
+                        help="标题在视频中的水平位置（左边界）"
+                    )
+                    st.session_state.title_left = title_left
+                
+                with col2:
+                    title_top = st.slider(
+                        "标题上边界 (%)",
+                        min_value=0,
+                        max_value=30,
+                        value=st.session_state.title_top,
+                        step=1,
+                        key="title_top_boundary",
+                        help="标题在视频中的垂直位置（上边界）"
+                    )
+                    st.session_state.title_top = title_top
+                
+                # 字幕边界设置
+                st.markdown("**字幕边界**")
+                col3, col4 = st.columns(2)
+                with col3:
+                    subtitle_left = st.slider(
+                        "字幕左边界 (%)",
+                        min_value=5,
+                        max_value=50,
+                        value=st.session_state.subtitle_left,
+                        step=1,
+                        key="subtitle_left_boundary",
+                        help="字幕区域的左边界位置"
+                    )
+                    st.session_state.subtitle_left = subtitle_left
+                
+                with col4:
+                    subtitle_right = st.slider(
+                        "字幕右边界 (%)",
+                        min_value=50,
+                        max_value=82,
+                        value=st.session_state.subtitle_right,
+                        step=1,
+                        key="subtitle_right_boundary",
+                        help="字幕区域的右边界位置（建议不超过75%避免与标题重叠）"
+                    )
+                    st.session_state.subtitle_right = subtitle_right
+                
+                col5, col6 = st.columns(2)
+                with col5:
+                    subtitle_top = st.slider(
+                        "字幕上边界 (%)",
+                        min_value=0,
+                        max_value=50,
+                        value=st.session_state.subtitle_top,
+                        step=1,
+                        key="subtitle_top_boundary",
+                        help="字幕区域的上边界位置（距离视频顶部的百分比）"
+                    )
+                    st.session_state.subtitle_top = subtitle_top
+                
+                with col6:
+                    subtitle_bottom = st.slider(
+                        "字幕下边界 (%)",
+                        min_value=50,
+                        max_value=100,
+                        value=st.session_state.subtitle_bottom,
+                        step=1,
+                        key="subtitle_bottom_boundary",
+                        help="字幕区域的下边界位置（距离视频顶部的百分比，建议不超过95%）"
+                    )
+                    st.session_state.subtitle_bottom = subtitle_bottom
+                
+                # 验证边界合理性
+                if subtitle_left >= subtitle_right:
+                    st.error("⚠️ 字幕左边界必须小于右边界")
+                
+                if subtitle_top >= subtitle_bottom:
+                    st.error("⚠️ 字幕上边界必须小于下边界")
+                
+                if subtitle_right > st.session_state.title_left - 5:
+                    st.warning("⚠️ 字幕右边界过近标题，可能重叠（建议预留至少5%间距）")
+                
+                if subtitle_bottom > 95:
+                    st.warning("⚠️ 字幕下边界过低，可能超出视频范围（建议不超过95%）")
+                
+                # 显示当前设置
+                subtitle_height = subtitle_bottom - subtitle_top
+                st.info(
+                    f"📍 当前边界: "
+                    f"标题({title_left}%, {title_top}%), "
+                    f"字幕区域({subtitle_left}%-{subtitle_right}%, {subtitle_top}%-{subtitle_bottom}%, 高度{subtitle_height}%)"
+                )
+                
+                # 清零偏移量（精确模式不使用偏移）
+                st.session_state.title_x_offset = 0
+                st.session_state.title_y_offset = 0
+                st.session_state.subtitle_x_offset = 0
+                st.session_state.subtitle_y_offset = 0
+        elif params.video_theme == "modern_book":
+            st.caption("📖 " + tr("Modern Book Layout: Title at top 20%, Subtitle at bottom 65%"))
+        elif params.video_theme == "cinema":
+            st.caption("🎬 " + tr("Cinema Layout: Title fullscreen center, Subtitle at bottom 10%"))
+        elif params.video_theme == "minimal":
+            st.caption("✨ " + tr("Minimal Layout: Title at top 10%, Subtitle at bottom 15%"))
+        
+        # 生成预览HTML
+        def generate_preview_html(theme, width, height, title_left=75, title_top=12, 
+                                 subtitle_left=22, subtitle_right=65, subtitle_top=12, subtitle_bottom=88):
+            """生成主题布局预览HTML
+            
+            Args:
+                theme: 主题名称
+                width, height: 预览容器尺寸
+                title_left: 标题左边界（%）
+                title_top: 标题上边界（%）
+                subtitle_left: 字幕左边界（%）
+                subtitle_right: 字幕右边界（%）
+                subtitle_top: 字幕上边界（%）
+                subtitle_bottom: 字幕下边界（%）
+            """
+            
+            # 基础样式
+            html = f"""
+            <div style="
+                width: {width}px;
+                height: {height}px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                position: relative;
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                margin: 10px auto;
+            ">
+            """
+            
+            if theme == "modern_book":
+                # 现代图书：标题顶部，字幕底部横排
+                title_y = 20
+                subtitle_y = 65
+                html += f"""
+                <div style="
+                    position: absolute;
+                    top: {title_y}%;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    color: #000000;
+                    background: rgba(255,255,255,0.9);
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    font-weight: bold;
+                    white-space: nowrap;
+                ">{tr("Video Title")}</div>
+                <div style="
+                    position: absolute;
+                    top: {subtitle_y}%;
+                    left: 10%;
+                    right: 10%;
+                    color: #000000;
+                    background: rgba(255,255,255,0.85);
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    text-align: center;
+                ">{tr("Subtitle text appears here")}</div>
+                """
+            
+            elif theme == "cinema":
+                # 电影模式：标题居中，字幕底部
+                html += f"""
+                <div style="
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: white;
+                    font-size: 18px;
+                    font-weight: bold;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+                    text-align: center;
+                ">{tr("Video Title")}</div>
+                <div style="
+                    position: absolute;
+                    bottom: 10%;
+                    left: 10%;
+                    right: 10%;
+                    color: white;
+                    background: rgba(0,0,0,0.6);
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    text-align: center;
+                ">{tr("Subtitle text appears here")}</div>
+                """
+            
+            elif theme == "ancient_scroll":
+                # 古书卷轴：标题右上角竖排，字幕竖排多列（使用边界参数）
+                subtitle_width = subtitle_right - subtitle_left
+                subtitle_height = subtitle_bottom - subtitle_top
+                html += f"""
+                <div style="
+                    position: absolute;
+                    top: {title_top}%;
+                    left: {title_left}%;
+                    writing-mode: vertical-rl;
+                    color: #8B4513;
+                    background: rgba(255,215,0,0.2);
+                    padding: 8px 4px;
+                    border-radius: 4px;
+                    font-size: 13px;
+                    font-weight: bold;
+                    text-shadow: 1px 1px 2px rgba(255,215,0,0.5);
+                ">{tr("Video Title")}</div>
+                <div style="
+                    position: absolute;
+                    top: {subtitle_top}%;
+                    left: {subtitle_left}%;
+                    width: {subtitle_width}%;
+                    height: {subtitle_height}%;
+                    writing-mode: vertical-rl;
+                    color: #FFD700;
+                    font-size: 11px;
+                    line-height: 1.8;
+                    text-shadow: 1px 1px 2px rgba(139,69,19,0.8);
+                    opacity: 0.9;
+                    overflow: hidden;
+                    border: 1px dashed rgba(255,215,0,0.3);
+                ">{tr("Vertical subtitle text")}<br/>{tr("Multiple columns")}</div>
+                <div style="
+                    position: absolute;
+                    top: 0;
+                    left: {subtitle_left}%;
+                    height: 100%;
+                    width: 1px;
+                    background: rgba(255,255,255,0.2);
+                "></div>
+                <div style="
+                    position: absolute;
+                    top: 0;
+                    left: {subtitle_right}%;
+                    height: 100%;
+                    width: 1px;
+                    background: rgba(255,255,255,0.2);
+                "></div>
+                <div style="
+                    position: absolute;
+                    top: {subtitle_top}%;
+                    left: 0;
+                    width: 100%;
+                    height: 1px;
+                    background: rgba(255,255,255,0.15);
+                "></div>
+                <div style="
+                    position: absolute;
+                    top: {subtitle_bottom}%;
+                    left: 0;
+                    width: 100%;
+                    height: 1px;
+                    background: rgba(255,255,255,0.15);
+                "></div>
+                <div style="
+                    position: absolute;
+                    top: 0;
+                    left: {title_left}%;
+                    height: 100%;
+                    width: 1px;
+                    background: rgba(255,215,0,0.3);
+                "></div>
+                """
+            
+            elif theme == "minimal":
+                # 简约模式：标题顶部居中，字幕底部
+                html += f"""
+                <div style="
+                    position: absolute;
+                    top: 10%;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    color: white;
+                    font-size: 16px;
+                    font-weight: bold;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+                ">{tr("Video Title")}</div>
+                <div style="
+                    position: absolute;
+                    bottom: 15%;
+                    left: 10%;
+                    right: 10%;
+                    color: white;
+                    font-size: 11px;
+                    text-align: center;
+                    text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+                ">{tr("Subtitle text appears here")}</div>
+                """
+            
+            html += "</div>"
+            return html
+        
+        # 显示预览
+        preview_html = generate_preview_html(
+            params.video_theme,
+            preview_width,
+            preview_height,
+            st.session_state.title_left,
+            st.session_state.title_top,
+            st.session_state.subtitle_left,
+            st.session_state.subtitle_right,
+            st.session_state.subtitle_top,
+            st.session_state.subtitle_bottom
+        )
+        # 使用HTML容器确保正确渲染
+        st.components.v1.html(preview_html, height=preview_height + 30, scrolling=False)
+        
+        # 保存边界参数到params（用于实际生成）
+        if hasattr(params, '__dict__'):
+            # 保存边界参数
+            params.__dict__['title_left'] = st.session_state.title_left
+            params.__dict__['title_top'] = st.session_state.title_top
+            params.__dict__['subtitle_left'] = st.session_state.subtitle_left
+            params.__dict__['subtitle_right'] = st.session_state.subtitle_right
+            params.__dict__['subtitle_top'] = st.session_state.subtitle_top
+            params.__dict__['subtitle_bottom'] = st.session_state.subtitle_bottom
+            # 也保存偏移量参数（兼容性）
+            params.__dict__['title_x_offset'] = st.session_state.title_x_offset
+            params.__dict__['title_y_offset'] = st.session_state.title_y_offset
+            params.__dict__['subtitle_x_offset'] = st.session_state.subtitle_x_offset
+            params.__dict__['subtitle_y_offset'] = st.session_state.subtitle_y_offset
+        
         font_names, font_display_names = get_all_fonts()
         
         # 默认字体优先级：毛笔手写体 > 黑体
@@ -1007,10 +1547,20 @@ with right_panel:
 
         font_cols = st.columns([0.3, 0.7])
         with font_cols[0]:
-            saved_text_fore_color = config.ui.get("text_fore_color", "#FFFFFF")
+            # 初始化颜色状态（如果不存在）
+            if "text_fore_color" not in st.session_state:
+                # 使用当前主题的默认颜色
+                theme_defaults = theme_color_defaults.get(params.video_theme, theme_color_defaults["minimal"])
+                st.session_state.text_fore_color = config.ui.get("text_fore_color", theme_defaults["text_fore_color"])
+            
             params.text_fore_color = st.color_picker(
-                tr("Font Color"), saved_text_fore_color
+                tr("Font Color"), 
+                st.session_state.text_fore_color,
+                help=f"字体颜色（当前主题默认：{theme_color_defaults.get(params.video_theme, {}).get('text_fore_color', '#FFFFFF')}）"
             )
+            # 用户修改后保存
+            if params.text_fore_color != st.session_state.text_fore_color:
+                st.session_state.text_fore_color = params.text_fore_color
             config.ui["text_fore_color"] = params.text_fore_color
 
         with font_cols[1]:
@@ -1020,12 +1570,103 @@ with right_panel:
 
         stroke_cols = st.columns([0.3, 0.7])
         with stroke_cols[0]:
-            params.stroke_color = st.color_picker(tr("Stroke Color"), "#000000")
+            # 初始化描边颜色状态（如果不存在）
+            if "stroke_color" not in st.session_state:
+                # 使用当前主题的默认颜色
+                theme_defaults = theme_color_defaults.get(params.video_theme, theme_color_defaults["minimal"])
+                st.session_state.stroke_color = config.ui.get("stroke_color", theme_defaults["stroke_color"])
+            
+            params.stroke_color = st.color_picker(
+                tr("Stroke Color"), 
+                st.session_state.stroke_color,
+                help=f"描边颜色（当前主题默认：{theme_color_defaults.get(params.video_theme, {}).get('stroke_color', '#000000')}）"
+            )
+            # 用户修改后保存
+            if params.stroke_color != st.session_state.stroke_color:
+                st.session_state.stroke_color = params.stroke_color
+            config.ui["stroke_color"] = params.stroke_color
+            
         with stroke_cols[1]:
             params.stroke_width = st.slider(tr("Stroke Width"), 0.0, 10.0, 1.5)
 
-start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
+# 生成视频按钮：快速生成 和 标准生成
+st.write("---")
+st.write("**" + tr("Video Generation Mode") + "**")
+
+# 模式对比说明
+mode_comparison = st.expander(tr("📊 Mode Comparison & Instructions"), expanded=False)
+with mode_comparison:
+    col_fast, col_standard = st.columns(2)
+    
+    with col_fast:
+        st.markdown("### ⚡ " + tr("Fast Mode"))
+        st.markdown(f"""
+        **{tr("Advantages")}:**
+        - ⚡ {tr("Speed: 10-20x faster")}
+        - 🚀 {tr("Uses FFmpeg stream copy (no re-encoding)")}
+        - 💾 {tr("Lower CPU/GPU usage")}
+        - 📦 {tr("Smaller file size")}
+        
+        **{tr("Limitations")}:**
+        - ⚠️ {tr("Does not support video transition effects")}
+        - ⚠️ {tr("Auto-fallback to standard mode if needed")}
+        
+        **{tr("Best For")}:**
+        - 📹 {tr("Quick video creation")}
+        - 🎯 {tr("Simple video transitions (none)")}
+        - ⏱️ {tr("Time-sensitive projects")}
+        """)
+    
+    with col_standard:
+        st.markdown("### 🎬 " + tr("Standard Mode"))
+        st.markdown(f"""
+        **{tr("Advantages")}:**
+        - ✨ {tr("Supports all transition effects")}
+        - 🎨 {tr("Full MoviePy processing capabilities")}
+        - 🔧 {tr("Maximum flexibility")}
+        - 🎞️ {tr("Best quality control")}
+        
+        **{tr("Limitations")}:**
+        - 🐢 {tr("Slower processing speed")}
+        - 💻 {tr("Higher resource usage")}
+        
+        **{tr("Best For")}:**
+        - 🎥 {tr("Professional video production")}
+        - 🌟 {tr("Complex transitions and effects")}
+        - 🎭 {tr("High-quality output requirements")}
+        """)
+
+button_cols = st.columns(2)
+
+with button_cols[0]:
+    fast_button = st.button(
+        "⚡ " + tr("Fast Generation"),
+        use_container_width=True,
+        type="primary",
+        help=tr("Use FFmpeg acceleration, 10-20x faster. Does not support transition effects.")
+    )
+
+with button_cols[1]:
+    standard_button = st.button(
+        "🎬 " + tr("Standard Generation"),
+        use_container_width=True,
+        help=tr("Full MoviePy processing, supports all effects but slower.")
+    )
+
+# 处理按钮点击
+start_button = fast_button or standard_button
 if start_button:
+    # 设置生成模式
+    if fast_button:
+        params.enable_fast_mode = True
+        st.success("⚡ " + tr("Fast Mode Selected") + " - " + tr("Expected 10-20x faster generation"))
+        st.caption("🔸 " + tr("Using: FFmpeg concat + stream copy (no re-encoding)"))
+        st.caption("💡 " + tr("Note: Will auto-switch to standard mode if transition effects are needed"))
+    else:
+        params.enable_fast_mode = False
+        st.info("🎬 " + tr("Standard Mode Selected") + " - " + tr("Full processing with all features"))
+        st.caption("🔸 " + tr("Using: MoviePy complete pipeline (supports all effects)"))
+        st.caption("⏱️ " + tr("Note: Processing may take longer but offers maximum flexibility"))
     config.save_config()
     task_id = str(uuid4())
     if not params.video_subject and not params.video_script:

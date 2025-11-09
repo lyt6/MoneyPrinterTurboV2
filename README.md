@@ -196,8 +196,17 @@ git clone https://github.com/harry0703/MoneyPrinterTurbo.git
 cd MoneyPrinterTurbo
 conda create -n MoneyPrinterTurbo python=3.11
 conda activate MoneyPrinterTurbo
+
+# 安装Python依赖
 pip install -r requirements.txt
+
+# 安装ffmpeg（必需，用于视频处理）
+conda install -c conda-forge ffmpeg
 ```
+
+> 注意：
+> - 安装完成后，请**重启终端**以使环境变量生效
+> - 如果不使用conda，也可以通过其他方式安装ffmpeg，详见 [GPU加速使用说明.md](GPU加速使用说明.md)
 
 #### ② 安装好 ImageMagick
 

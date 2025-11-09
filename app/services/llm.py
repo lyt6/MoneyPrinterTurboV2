@@ -294,11 +294,66 @@ def _generate_response(prompt: str) -> str:
 def generate_script(
     video_subject: str, language: str = "", paragraph_number: int = 1, video_duration: int = 60
 ) -> str:
+    # 根据时长计算建议字数（中文按每秒3-4字，英文按每秒2-3词）
+    suggested_words = video_duration * 3
+    
+    # 根据时长给出更明确的约束和示例
+    if video_duration <= 10:
+        duration_guide = "超短视频（5-10秒）"
+        content_structure = "1-2句话即可，快速点题"
+        word_range = f"{int(suggested_words * 0.8)}-{int(suggested_words)}"
+        example_length = "例如：20-30字"
+    elif video_duration <= 30:
+        duration_guide = "短视频（30秒）"
+        content_structure = "2-3句话，简明扼要"
+        word_range = f"{int(suggested_words * 0.8)}-{int(suggested_words)}"
+        example_length = "例如：70-90字"
+    elif video_duration <= 60:
+        duration_guide = "1分钟视频"
+        content_structure = "1-2个短段落，阐述核心观点"
+        word_range = f"{int(suggested_words * 0.9)}-{int(suggested_words * 1.1)}"
+        example_length = "例如：150-200字"
+    elif video_duration <= 180:
+        duration_guide = "3分钟视频"
+        content_structure = "3-4个段落，展开讨论主题"
+        word_range = f"{int(suggested_words * 0.9)}-{int(suggested_words * 1.1)}"
+        example_length = "例如：450-550字"
+    elif video_duration <= 300:
+        duration_guide = "5分钟视频"
+        content_structure = "5-7个段落，深入分析和举例"
+        word_range = f"{int(suggested_words * 0.9)}-{int(suggested_words * 1.1)}"
+        example_length = "例如：800-1000字"
+    elif video_duration <= 600:
+        duration_guide = "10分钟视频"
+        content_structure = "8-12个段落，全面深入论述，包含多个案例或角度"
+        word_range = f"{int(suggested_words * 0.9)}-{int(suggested_words * 1.1)}"
+        example_length = "例如：1600-2000字"
+    elif video_duration <= 1200:
+        duration_guide = "20分钟视频"
+        content_structure = "15-20个段落，深度内容，详细展开各个方面"
+        word_range = f"{int(suggested_words * 0.9)}-{int(suggested_words * 1.1)}"
+        example_length = "例如：3200-4000字"
+    else:
+        duration_guide = "30分钟长视频"
+        content_structure = "20-30个段落，系统性论述，包含丰富细节和案例"
+        word_range = f"{int(suggested_words * 0.9)}-{int(suggested_words * 1.1)}"
+        example_length = "例如：4800-6000字"
+    
     prompt = f"""
 # Role: Video Script Generator
 
 ## Goals:
-Generate a script for a video, depending on the subject of the video.
+Generate a script for a video of EXACTLY {video_duration} seconds.
+
+## CRITICAL LENGTH REQUIREMENT:
+⚠️ **VIDEO DURATION: {video_duration} seconds = {duration_guide}**
+⚠️ **REQUIRED WORD COUNT: {word_range} words/characters** ({example_length})
+⚠️ **CONTENT STRUCTURE: {content_structure}**
+
+你必须严格控制文案长度！{video_duration}秒的视频需要{word_range}字的内容。
+- 如果是1分钟视频（60秒），大约需要150-200字
+- 如果是10分钟视频（600秒），大约需要1600-2000字
+- 内容必须与时长匹配，过短或过长都不可接受
 
 ## Constrains:
 1. the script is to be returned as a string with the specified number of paragraphs.
@@ -309,12 +364,16 @@ Generate a script for a video, depending on the subject of the video.
 6. do not include "voiceover", "narrator" or similar indicators of what should be spoken at the beginning of each paragraph or line.
 7. you must not mention the prompt, or anything about the script itself. also, never talk about the amount of paragraphs or lines. just write the script.
 8. respond in the same language as the video subject.
-9. the script should be suitable for a video of approximately {video_duration} seconds duration.
+9. **MOST IMPORTANT**: Write EXACTLY {word_range} words/characters. Count your words carefully!
+   - For {video_duration} seconds: target is {suggested_words} words
+   - Reading speed: 3-4 characters/second (Chinese) or 2-3 words/second (English)
+   - {content_structure}
 
 # Initialization:
 - video subject: {video_subject}
 - number of paragraphs: {paragraph_number}
-- video duration: {video_duration} seconds
+- **video duration: {video_duration} seconds ({duration_guide})**
+- **REQUIRED length: {word_range} words/characters ({example_length})**
 """.strip()
     if language:
         prompt += f"\n- language: {language}"
