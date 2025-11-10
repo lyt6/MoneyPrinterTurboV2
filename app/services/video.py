@@ -1241,6 +1241,11 @@ def generate_video(
             subtitle_x_offset = getattr(params, 'subtitle_x_offset', 0)
             subtitle_y_offset = getattr(params, 'subtitle_y_offset', 0)
             
+            # 使用音频时长作为video_duration，确保所有字幕都能显示
+            # 对于静态图片+音频，video_clip.duration可能不准确，audio_clip.duration才是完整时长
+            total_duration = max(audio_clip.duration, video_clip.duration)
+            logger.info(f"  total duration: video={video_clip.duration:.2f}s, audio={audio_clip.duration:.2f}s, using={total_duration:.2f}s")
+            
             text_clips = create_accumulated_subtitles_for_book_theme(
                 subtitle_items=sub.subtitles,
                 font_path=font_path,
@@ -1251,7 +1256,7 @@ def generate_video(
                 text_color="#000000" if theme == VideoTheme.modern_book.value else params.text_fore_color,
                 stroke_color=params.stroke_color,
                 stroke_width=params.stroke_width,
-                video_duration=video_clip.duration,
+                video_duration=total_duration,
                 subtitle_x_offset=subtitle_x_offset,
                 subtitle_y_offset=subtitle_y_offset
             )
@@ -1274,6 +1279,9 @@ def generate_video(
             title_x_offset = getattr(params, 'title_x_offset', 0)
             title_y_offset = getattr(params, 'title_y_offset', 0)
             
+            # 使用与video_clip相同的时长（已经包含了字幕）
+            current_duration = video_clip.duration
+            
             # 根据主题创建标题
             title_clips = create_title_clips_for_theme(
                 theme=theme,
@@ -1281,7 +1289,7 @@ def generate_video(
                 font_path=font_path,
                 video_width=video_width,
                 video_height=video_height,
-                video_duration=video_clip.duration,
+                video_duration=current_duration,
                 base_font_size=params.font_size,
                 stroke_width=params.stroke_width,
                 title_x_offset=title_x_offset,

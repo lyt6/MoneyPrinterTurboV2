@@ -6,8 +6,67 @@ import os
 import subprocess
 import shutil
 from loguru import logger
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from app.models.schema import VideoAspect
+
+
+def find_ffmpeg() -> Optional[str]:
+    """
+    查找ffmpeg可执行文件路径
+    优先级：
+    1. 系统PATH中的ffmpeg
+    2. MoviePy/imageio_ffmpeg内置的ffmpeg
+    3. 常见安装位置
+    4. 直接尝试执行ffmpeg（即使which找不到）
+    
+    Returns:
+        ffmpeg路径，如果未找到则返回None
+    """
+    # 1. 检查系统PATH
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        logger.debug(f"找到系统ffmpeg: {ffmpeg_path}")
+        return ffmpeg_path
+    
+    # 2. 直接尝试执行ffmpeg命令（有时PATH已更新但shutil.which检测不到）
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-version'],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if result.returncode == 0:
+            logger.info("✅ ffmpeg命令可执行（在系统PATH中），但shutil.which未检测到")
+            logger.info("💡 这是正常的，将直接使用'ffmpeg'命令")
+            return 'ffmpeg'  # 直接返回命令名
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    
+    # 3. 检查imageio_ffmpeg（MoviePy内置）
+    try:
+        import imageio_ffmpeg
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        if os.path.exists(ffmpeg_path):
+            logger.info(f"使用imageio_ffmpeg内置版本: {ffmpeg_path}")
+            return ffmpeg_path
+    except ImportError:
+        pass
+    
+    # 4. 检查常见Windows安装位置
+    if os.name == 'nt':  # Windows
+        common_paths = [
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"),
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                logger.info(f"找到ffmpeg: {path}")
+                return path
+    
+    logger.warning("未找到ffmpeg可执行文件")
+    return None
 
 
 def normalize_video_materials(
@@ -33,7 +92,7 @@ def normalize_video_materials(
         - normalized_paths: 规范化后的视频路径列表
         - is_already_compatible: 是否所有素材已经兼容（无需转换）
     """
-    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_path = find_ffmpeg()
     if not ffmpeg_path:
         logger.warning("未找到ffmpeg，无法规范化素材")
         return video_paths, False
@@ -155,9 +214,19 @@ def generate_video_fast(
         生成的视频文件路径
     """
     try:
-        ffmpeg_path = shutil.which('ffmpeg')
+        ffmpeg_path = find_ffmpeg()
         if not ffmpeg_path:
             logger.error("未找到ffmpeg，无法使用快速生成模式")
+            logger.info("💡 提示：")
+            logger.info("  1. 如果已安装ffmpeg：")
+            logger.info("     - 完全关闭当前终端窗口")
+            logger.info("     - 打开新的PowerShell窗口")
+            logger.info("     - 测试: ffmpeg -version")
+            logger.info("     - 在新窗口中运行: .\\webui.bat")
+            logger.info("  2. 如果未安装ffmpeg：")
+            logger.info("     - 使用: winget install Gyan.FFmpeg")
+            logger.info("  3. 将自动回退到标准模式（使用MoviePy内置ffmpeg）")
+            logger.info("")
             return None
         
         output_dir = os.path.dirname(output_path)
@@ -323,7 +392,11 @@ def _generate_with_reencode(
     """
     logger.info("使用重新编码模式生成视频...")
     
-    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_path = find_ffmpeg()
+    if not ffmpeg_path:
+        logger.error("未找到ffmpeg")
+        return None
+    
     output_dir = os.path.dirname(output_path)
     
     # 获取视频分辨率
@@ -445,6 +518,8 @@ def generate_video_from_image_fast(
     video_height: int,
     background_music: str = None,
     bgm_volume: float = 0.2,
+    video_subject: str = None,  # 新增：视频主题/标题
+    video_theme: str = None,    # 新增：视频主题模式
 ) -> str:
     """
     从静态图片快速生成视频 - 使用FFmpeg直接处理，速度提升10倍以上
@@ -468,9 +543,19 @@ def generate_video_from_image_fast(
     Returns:
         生成的视频文件路径
     """
-    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_path = find_ffmpeg()
     if not ffmpeg_path:
         logger.error("未找到ffmpeg，无法使用快速生成模式")
+        logger.info("💡 提示：")
+        logger.info("  1. 如果已安装ffmpeg：")
+        logger.info("     - 完全关闭当前终端窗口")
+        logger.info("     - 打开新的PowerShell窗口")
+        logger.info("     - 测试: ffmpeg -version")
+        logger.info("     - 在新窗口中运行: .\\webui.bat")
+        logger.info("  2. 如果未安装ffmpeg：")
+        logger.info("     - 使用: winget install Gyan.FFmpeg")
+        logger.info("  3. 将自动回退到标准模式（使用MoviePy内置ffmpeg）")
+        logger.info("")
         return None
     
     try:
@@ -516,7 +601,7 @@ def generate_video_from_image_fast(
         logger.info("  ✅ 视频基础流生成完成")
         
         # 步骤2：叠加音频和字幕（使用FFmpeg，避免重编码）
-        logger.info("  - 步骤2/2: 叠加音频和字幕...")
+        logger.info("  - 步骤2/2: 叠加音频、字幕和标题...")
         
         # 构建FFmpeg命令
         final_cmd = [ffmpeg_path, '-i', temp_video, '-i', audio_file]
@@ -537,21 +622,50 @@ def generate_video_from_image_fast(
         except:
             has_subtitle_filter = False
         
-        # 构建视频滤镜（叠加字幕）
+        # 构建视频滤镜（叠加字幕和标题）
+        video_filters = []
+        
+        # 1. 字幕滤镜
         if subtitle_file and os.path.exists(subtitle_file):
             if has_subtitle_filter:
-                # 方案1：使用subtitles滤镜（最佳效果，支持完整ASS/SRT格式）
+                # 方案1：使用subtitles滤镜（支持ASS/SRT格式）
                 logger.debug("  使用subtitles滤镜渲染字幕")
                 # 转义字幕文件路径（Windows和特殊字符）
                 subtitle_path_escaped = subtitle_file.replace('\\', '/').replace(':', '\\:')
-                video_filter = f"subtitles='{subtitle_path_escaped}'"
+                video_filters.append(f"subtitles='{subtitle_path_escaped}'")
             else:
-                # 方案2：完全跳过字幕，使用纯FFmpeg快速生成
-                logger.warning("  ⚠️  FFmpeg不支持subtitles滤镜，快速模式将跳过字幕渲染")
-                logger.warning("  💡 如需字幕支持，请使用标准模式或安装支持libass的FFmpeg")
-                video_filter = None
-        else:
-            video_filter = None
+                # 方案2：字幕不支持，使用默认样式
+                logger.warning("  ⚠️  FFmpeg不支持subtitles滤镜，将使用默认字幕样式")
+        
+        # 2. 标题滤镜（使用drawtext）
+        if video_subject:
+            logger.info(f"  - 添加视频标题: {video_subject}")
+            
+            # 转义文本中的特殊字符
+            title_text = video_subject.replace("'", "").replace('"', '').replace(':', '').replace('\\', '')
+            
+            # 根据主题设置不同的样式
+            if video_theme in ['ancient_scroll', 'modern_book']:
+                # 古书卷轴/现代图书：标题在正中间
+                title_x = '(w-text_w)/2'
+                title_y = '(h-text_h)/2'
+                fontsize = int(video_height * 0.08)  # 8%高度
+                fontcolor = 'white'
+                logger.info(f"  - 使用{video_theme}主题样式：标题居中")
+            else:
+                # 其他主题：标题在顶部
+                title_x = '(w-text_w)/2'
+                title_y = 'h*0.1'
+                fontsize = int(video_height * 0.06)  # 6%高度
+                fontcolor = 'white'
+            
+            # 构建drawtext滤镜
+            # 注意：Windows下可能需要指定字体文件，但先尝试默认字体
+            drawtext_filter = f"drawtext=text='{title_text}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor={fontcolor}:borderw=3:bordercolor=black"
+            video_filters.append(drawtext_filter)
+        
+        # 合并所有视频滤镜
+        video_filter = ','.join(video_filters) if video_filters else None
         
         # 构建完整命令
         if background_music and os.path.exists(background_music):
@@ -648,7 +762,7 @@ def generate_template_video(
     Returns:
         模板视频路径
     """
-    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_path = find_ffmpeg()
     if not ffmpeg_path:
         return None
     
