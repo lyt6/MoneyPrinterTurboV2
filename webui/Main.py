@@ -724,9 +724,11 @@ with middle_panel:
 
         # 添加TTS服务器选择下拉框
         tts_servers = [
-            ("azure-tts-v1", "Azure TTS V1"),
+            ("azure-tts-v1", "Azure TTS V1 (免费)"),
             ("azure-tts-v2", "Azure TTS V2"),
             ("siliconflow", "SiliconFlow TTS"),
+            ("gtts", "Google TTS (完全免费)"),
+            ("pyttsx3", "Pyttsx3 (本地离线免费)"),
         ]
 
         # 获取保存的TTS服务器，默认为v1
@@ -753,6 +755,12 @@ with middle_panel:
         if selected_tts_server == "siliconflow":
             # 获取硅基流动的声音列表
             filtered_voices = voice.get_siliconflow_voices()
+        elif selected_tts_server == "gtts":
+            # 获取gTTS的声音列表
+            filtered_voices = voice.get_gtts_voices()
+        elif selected_tts_server == "pyttsx3":
+            # 获取pyttsx3的声音列表
+            filtered_voices = voice.get_pyttsx3_voices()
         else:
             # 获取Azure的声音列表
             all_voices = voice.get_all_azure_voices(filter_locals=None)
@@ -895,6 +903,28 @@ with middle_panel:
             )
 
             config.siliconflow["api_key"] = siliconflow_api_key
+
+        # 当选择gTTS时，显示说明信息
+        if selected_tts_server == "gtts":
+            st.success(
+                "🎉 **Google TTS (完全免费)**\n\n"
+                + "✅ 无需API Key，完全免费使用\n"
+                + "✅ 支持19种语言\n"
+                + "✅ 声音自然流畅\n"
+                + "⚠️ 需要网络连接\n"
+                + "💡 如需调整语速，需安装 pydub 和 ffmpeg"
+            )
+
+        # 当选择pyttsx3时，显示说明信息
+        if selected_tts_server == "pyttsx3":
+            st.success(
+                "💻 **Pyttsx3 (本地离线免费)**\n\n"
+                + "✅ 完全离线，不需要网络连接\n"
+                + "✅ 无需API Key，完全免费\n"
+                + "✅ 使用系统内置声音\n"
+                + "⚠️ 声音质量取决于系统\n"
+                + "💡 Windows系统自带中文语音，macOS可Siri声音"
+            )
 
         params.voice_volume = st.selectbox(
             tr("Speech Volume"),

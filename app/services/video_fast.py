@@ -645,24 +645,39 @@ def generate_video_from_image_fast(
             title_text = video_subject.replace("'", "").replace('"', '').replace(':', '').replace('\\', '')
             
             # 根据主题设置不同的样式
-            if video_theme in ['ancient_scroll', 'modern_book']:
-                # 古书卷轴/现代图书：标题在正中间
+            if video_theme == 'ancient_scroll':
+                # 古书卷轴：竖排标题在右上角
+                logger.info("  - 使用古书卷轴样式：竖排标题 + 金色文字")
+                
+                # 将标题拆分成单个字符，竖排显示
+                chars = list(title_text)
+                fontsize = int(video_height * 0.05)  # 5%高度
+                x_pos = int(video_width * 0.85)  # 右侧85%位置
+                y_start = int(video_height * 0.12)  # 从12%开始
+                
+                # 为每个字符创建drawtext滤镜
+                for i, char in enumerate(chars):
+                    y_pos = y_start + i * int(fontsize * 1.2)
+                    # 古书卷轴风格：棕色文字 + 金色描边
+                    char_filter = f"drawtext=text='{char}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor=#8B4513:borderw=2:bordercolor=#FFD700"
+                    video_filters.append(char_filter)
+                
+            elif video_theme == 'modern_book':
+                # 现代图书：标题在正中间
                 title_x = '(w-text_w)/2'
                 title_y = '(h-text_h)/2'
                 fontsize = int(video_height * 0.08)  # 8%高度
-                fontcolor = 'white'
-                logger.info(f"  - 使用{video_theme}主题样式：标题居中")
+                logger.info(f"  - 使用现代图书样式：标题居中")
+                drawtext_filter = f"drawtext=text='{title_text}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
+                video_filters.append(drawtext_filter)
+                
             else:
                 # 其他主题：标题在顶部
                 title_x = '(w-text_w)/2'
                 title_y = 'h*0.1'
                 fontsize = int(video_height * 0.06)  # 6%高度
-                fontcolor = 'white'
-            
-            # 构建drawtext滤镜
-            # 注意：Windows下可能需要指定字体文件，但先尝试默认字体
-            drawtext_filter = f"drawtext=text='{title_text}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor={fontcolor}:borderw=3:bordercolor=black"
-            video_filters.append(drawtext_filter)
+                drawtext_filter = f"drawtext=text='{title_text}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
+                video_filters.append(drawtext_filter)
         
         # 合并所有视频滤镜
         video_filter = ','.join(video_filters) if video_filters else None

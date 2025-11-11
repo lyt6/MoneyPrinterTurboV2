@@ -42,6 +42,81 @@ def get_siliconflow_voices() -> list[str]:
     ]
 
 
+def get_gtts_voices() -> list[str]:
+    """
+    获取gTTS（Google Text-to-Speech）支持的声音列表
+    gTTS是完全免费的，无需API Key
+    
+    Returns:
+        声音列表，格式为 ["gtts:zh-CN-Female", "gtts:en-US-Female", ...]
+    """
+    # gTTS支持的主要语言
+    voices = [
+        ("zh-CN", "Chinese (Simplified)", "Female"),
+        ("zh-TW", "Chinese (Traditional)", "Female"),
+        ("en-US", "English (US)", "Female"),
+        ("en-GB", "English (UK)", "Female"),
+        ("en-AU", "English (Australia)", "Female"),
+        ("en-IN", "English (India)", "Female"),
+        ("ja-JP", "Japanese", "Female"),
+        ("ko-KR", "Korean", "Female"),
+        ("fr-FR", "French", "Female"),
+        ("de-DE", "German", "Female"),
+        ("es-ES", "Spanish (Spain)", "Female"),
+        ("es-MX", "Spanish (Mexico)", "Female"),
+        ("pt-BR", "Portuguese (Brazil)", "Female"),
+        ("ru-RU", "Russian", "Female"),
+        ("it-IT", "Italian", "Female"),
+        ("ar-SA", "Arabic", "Female"),
+        ("hi-IN", "Hindi", "Female"),
+        ("th-TH", "Thai", "Female"),
+        ("vi-VN", "Vietnamese", "Female"),
+    ]
+    
+    return [
+        f"gtts:{lang}-{gender}-{name}"
+        for lang, name, gender in voices
+    ]
+
+
+def get_pyttsx3_voices() -> list[str]:
+    """
+    获取pyttsx3（本地离线TTS）支持的声音列表
+    pyttsx3完全免费且离线工作，不需要网络连接
+    
+    Returns:
+        声音列表，格式为 ["pyttsx3:system-0-Male", ...]
+    """
+    try:
+        import pyttsx3
+        engine = pyttsx3.init()
+        system_voices = engine.getProperty('voices')
+        engine.stop()
+        
+        voices = []
+        for idx, v in enumerate(system_voices):
+            # 检测性别
+            gender = "Male" if "male" in v.name.lower() or "david" in v.name.lower() else "Female"
+            # 提取语言代码
+            lang_code = "en-US"  # 默认
+            if "zh" in v.id.lower() or "chinese" in v.name.lower():
+                lang_code = "zh-CN"
+            elif "ja" in v.id.lower() or "japanese" in v.name.lower():
+                lang_code = "ja-JP"
+            
+            voice_name = v.name.split(" ")[0] if " " in v.name else v.name
+            voices.append(f"pyttsx3:{lang_code}-{idx}-{gender}-{voice_name}")
+        
+        return voices[:10]  # 限制显示前10个系统声音
+    except Exception as e:
+        logger.warning(f"Failed to get pyttsx3 voices: {str(e)}")
+        # 返回默认声音列表
+        return [
+            "pyttsx3:en-US-0-Male-David",
+            "pyttsx3:en-US-1-Female-Zira",
+        ]
+
+
 def get_all_azure_voices(filter_locals=None) -> list[str]:
     azure_voices_str = """
 Name: af-ZA-AdriNeural
@@ -1077,6 +1152,16 @@ def is_siliconflow_voice(voice_name: str):
     return voice_name.startswith("siliconflow:")
 
 
+def is_gtts_voice(voice_name: str):
+    """检查是否是gTTS的声音"""
+    return voice_name.startswith("gtts:")
+
+
+def is_pyttsx3_voice(voice_name: str):
+    """检查是否是pyttsx3的声音"""
+    return voice_name.startswith("pyttsx3:")
+
+
 def tts(
     text: str,
     voice_name: str,
@@ -1087,7 +1172,7 @@ def tts(
     if is_azure_v2_voice(voice_name):
         return azure_tts_v2(text, voice_name, voice_file)
     elif is_siliconflow_voice(voice_name):
-        # 从voice_name中提取模型和声音
+        # 从 voice_name 中提取模型和声音
         # 格式: siliconflow:model:voice-Gender
         parts = voice_name.split(":")
         if len(parts) >= 3:
@@ -1102,6 +1187,24 @@ def tts(
             )
         else:
             logger.error(f"Invalid siliconflow voice name format: {voice_name}")
+            return None
+    elif is_gtts_voice(voice_name):
+        # 格式: gtts:zh-CN-Female-Chinese (Simplified)
+        parts = voice_name.split("-")
+        if len(parts) >= 2:
+            lang = f"{parts[0].replace('gtts:', '')}-{parts[1]}"  # zh-CN, en-US 等
+            return gtts_tts(text, lang, voice_rate, voice_file)
+        else:
+            logger.error(f"Invalid gTTS voice name format: {voice_name}")
+            return None
+    elif is_pyttsx3_voice(voice_name):
+        # 格式: pyttsx3:en-US-0-Male-David
+        parts = voice_name.split("-")
+        if len(parts) >= 3:
+            voice_index = int(parts[2])  # 0, 1, 2...
+            return pyttsx3_tts(text, voice_index, voice_rate, voice_file, voice_volume)
+        else:
+            logger.error(f"Invalid pyttsx3 voice name format: {voice_name}")
             return None
     return azure_tts_v1(text, voice_name, voice_rate, voice_file)
 
@@ -1286,6 +1389,229 @@ def siliconflow_tts(
         except Exception as e:
             logger.error(f"siliconflow tts failed: {str(e)}")
 
+    return None
+
+
+def gtts_tts(
+    text: str,
+    lang: str,
+    voice_rate: float,
+    voice_file: str,
+) -> Union[SubMaker, None]:
+    """
+    使用gTTS (Google Text-to-Speech) 生成语音
+    完全免费，无需API Key
+    
+    Args:
+        text: 要转换为语音的文本
+        lang: 语言代码，如 "zh-CN", "en-US", "ja-JP" 等
+        voice_rate: 语音速度（gTTS不支持，可后期处理）
+        voice_file: 输出的音频文件路径
+        
+    Returns:
+        SubMaker对象或None
+    """
+    text = text.strip()
+    
+    for i in range(3):  # 尝试3次
+        try:
+            logger.info(f"start gTTS, lang: {lang}, try: {i + 1}")
+            
+            from gtts import gTTS
+            
+            # 将语言代码转换为gTTS格式
+            # zh-CN -> zh, en-US -> en, ja-JP -> ja
+            gtts_lang = lang.split("-")[0]
+            
+            # 生成语音
+            tts = gTTS(text=text, lang=gtts_lang, slow=False)
+            tts.save(voice_file)
+            
+            # 如果需要调整语速，使用pydub处理
+            if abs(voice_rate - 1.0) > 0.01:  # 如果语速不是1.0
+                try:
+                    from pydub import AudioSegment
+                    from pydub.effects import speedup
+                    
+                    audio = AudioSegment.from_mp3(voice_file)
+                    # 调整语速
+                    if voice_rate > 1.0:
+                        audio = speedup(audio, playback_speed=voice_rate)
+                    else:
+                        # 降速：通过改变frame_rate
+                        audio = audio._spawn(audio.raw_data, overrides={
+                            "frame_rate": int(audio.frame_rate * voice_rate)
+                        }).set_frame_rate(audio.frame_rate)
+                    
+                    audio.export(voice_file, format="mp3")
+                    logger.info(f"adjusted speed to {voice_rate}x")
+                except Exception as e:
+                    logger.warning(f"Failed to adjust speed: {str(e)}")
+            
+            # 创建 SubMaker 对象
+            sub_maker = SubMaker()
+            
+            # 获取音频文件的实际长度
+            try:
+                from moviepy import AudioFileClip
+                
+                audio_clip = AudioFileClip(voice_file)
+                audio_duration = audio_clip.duration
+                audio_clip.close()
+                
+                # 将音频长度转换为100纳秒单位（与 edge_tts 兼容）
+                audio_duration_100ns = int(audio_duration * 10000000)
+                
+                # 使用文本分割来创建更准确的字幕
+                sentences = utils.split_string_by_punctuations(text)
+                
+                if sentences:
+                    # 计算每个句子的大致时长（按字符数比例分配）
+                    total_chars = sum(len(s) for s in sentences)
+                    char_duration = (
+                        audio_duration_100ns / total_chars if total_chars > 0 else 0
+                    )
+                    
+                    current_offset = 0
+                    for sentence in sentences:
+                        if not sentence.strip():
+                            continue
+                        
+                        # 计算当前句子的时长
+                        sentence_chars = len(sentence)
+                        sentence_duration = int(sentence_chars * char_duration)
+                        
+                        # 添加到 SubMaker
+                        sub_maker.subs.append(sentence)
+                        sub_maker.offset.append(
+                            (current_offset, current_offset + sentence_duration)
+                        )
+                        
+                        # 更新偏移量
+                        current_offset += sentence_duration
+                else:
+                    # 如果无法分割，则使用整个文本作为一个字幕
+                    sub_maker.subs = [text]
+                    sub_maker.offset = [(0, audio_duration_100ns)]
+                    
+            except Exception as e:
+                logger.warning(f"Failed to create accurate subtitles: {str(e)}")
+                # 回退到简单的字幕
+                sub_maker.subs = [text]
+                sub_maker.offset = [(0, 100000000)]  # 默认10秒
+            
+            logger.success(f"gTTS succeeded: {voice_file}")
+            return sub_maker
+            
+        except Exception as e:
+            logger.error(f"gTTS failed: {str(e)}")
+    
+    return None
+
+
+def pyttsx3_tts(
+    text: str,
+    voice_index: int,
+    voice_rate: float,
+    voice_file: str,
+    voice_volume: float = 1.0,
+) -> Union[SubMaker, None]:
+    """
+    使用pyttsx3（本地离线TTS）生成语音
+    完全免费且离线工作，不需要网络连接
+    
+    Args:
+        text: 要转换为语音的文本
+        voice_index: 系统声音索引
+        voice_rate: 语音速度，范围[0.5, 2.0]
+        voice_file: 输出的音频文件路径
+        voice_volume: 语音音量，范围[0.0, 1.0]
+        
+    Returns:
+        SubMaker对象或None
+    """
+    text = text.strip()
+    
+    for i in range(3):  # 尝试3次
+        try:
+            logger.info(f"start pyttsx3, voice_index: {voice_index}, try: {i + 1}")
+            
+            import pyttsx3
+            
+            engine = pyttsx3.init()
+            
+            # 设置声音
+            voices = engine.getProperty('voices')
+            if 0 <= voice_index < len(voices):
+                engine.setProperty('voice', voices[voice_index].id)
+            else:
+                logger.warning(f"Voice index {voice_index} out of range, using default")
+            
+            # 设置语速 (pyttsx3的速度范围一般是100-200)
+            # 转换voice_rate (0.5-2.0) 到 pyttsx3的范围
+            rate = engine.getProperty('rate')
+            engine.setProperty('rate', int(rate * voice_rate))
+            
+            # 设置音量 (0.0-1.0)
+            engine.setProperty('volume', voice_volume)
+            
+            # 生成语音文件
+            engine.save_to_file(text, voice_file)
+            engine.runAndWait()
+            engine.stop()
+            
+            # 创建 SubMaker 对象
+            sub_maker = SubMaker()
+            
+            # 获取音频文件的实际长度
+            try:
+                from moviepy import AudioFileClip
+                
+                audio_clip = AudioFileClip(voice_file)
+                audio_duration = audio_clip.duration
+                audio_clip.close()
+                
+                # 将音频长度转换为100纳秒单位
+                audio_duration_100ns = int(audio_duration * 10000000)
+                
+                # 使用文本分割来创建更准确的字幕
+                sentences = utils.split_string_by_punctuations(text)
+                
+                if sentences:
+                    total_chars = sum(len(s) for s in sentences)
+                    char_duration = (
+                        audio_duration_100ns / total_chars if total_chars > 0 else 0
+                    )
+                    
+                    current_offset = 0
+                    for sentence in sentences:
+                        if not sentence.strip():
+                            continue
+                        
+                        sentence_chars = len(sentence)
+                        sentence_duration = int(sentence_chars * char_duration)
+                        
+                        sub_maker.subs.append(sentence)
+                        sub_maker.offset.append(
+                            (current_offset, current_offset + sentence_duration)
+                        )
+                        
+                        current_offset += sentence_duration
+                else:
+                    sub_maker.subs = [text]
+                    sub_maker.offset = [(0, audio_duration_100ns)]
+                    
+            except Exception as e:
+                logger.warning(f"Failed to create accurate subtitles: {str(e)}")
+                sub_maker.subs = [text]
+                sub_maker.offset = [(0, 100000000)]  # 默认10秒
+            
+            logger.success(f"pyttsx3 succeeded: {voice_file}")
+            return sub_maker
+            
+        except Exception as e:
+            logger.error(f"pyttsx3 failed: {str(e)}")
+    
     return None
 
 
