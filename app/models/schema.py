@@ -37,6 +37,19 @@ class VideoTheme(str, Enum):
     minimal = "minimal"              # 简约模式：标题居中靠上，字幕底部
 
 
+class SubtitleColorTheme(str, Enum):
+    """
+    字幕颜色主题（仅用于古书卷轴主题）
+    定义未读、正在读、已读三种状态的颜色
+    """
+    classic_gold = "classic_gold"        # 经典金棕：黑色 → 金色 → 棕色
+    elegant_blue = "elegant_blue"        # 雅致蓝白：深蓝 → 浅蓝 → 白色
+    warm_sunset = "warm_sunset"          # 温暖落日：深红 → 橙色 → 淡黄
+    fresh_green = "fresh_green"          # 清新绿意：深绿 → 翠绿 → 浅绿
+    purple_dream = "purple_dream"        # 紫色梦境：深紫 → 粉紫 → 淡紫
+    ink_wash = "ink_wash"                # 水墨丹青：黑色 → 灰色 → 浅灰
+
+
 class VideoAspect(str, Enum):
     landscape = "16:9"
     portrait = "9:16"
@@ -123,6 +136,7 @@ class VideoParams(BaseModel):
     
     # 视频主题设置
     video_theme: Optional[VideoTheme] = VideoTheme.modern_book.value  # 默认使用现代图书模式
+    subtitle_color_theme: Optional[str] = "classic_gold"  # 字幕颜色主题（仅用于古书卷轴）
     
     # 快速生成模式（性能优化）
     enable_fast_mode: Optional[bool] = True  # 启用快速生成模式，速度提升10-20倍

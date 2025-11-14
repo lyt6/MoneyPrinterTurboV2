@@ -277,6 +277,7 @@ def generate_final_videos(
                     bgm_volume=params.bgm_volume if params.bgm_volume else 0.2,
                     video_subject=params.video_subject if hasattr(params, 'video_subject') else None,
                     video_theme=params.video_theme if hasattr(params, 'video_theme') else None,
+                    subtitle_color_theme=params.subtitle_color_theme if hasattr(params, 'subtitle_color_theme') else "classic_gold",
                 )
             else:
                 # 多视频素材使用普通的快速拼接

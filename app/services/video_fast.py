@@ -8,6 +8,7 @@ import shutil
 from loguru import logger
 from typing import List, Tuple, Optional
 from app.models.schema import VideoAspect
+from app.config.subtitle_themes import get_subtitle_theme_colors  # 导入颜色主题配置
 
 
 def find_ffmpeg() -> Optional[str]:
@@ -520,6 +521,7 @@ def generate_video_from_image_fast(
     bgm_volume: float = 0.2,
     video_subject: str = None,  # 新增：视频主题/标题
     video_theme: str = None,    # 新增：视频主题模式
+    subtitle_color_theme: str = "classic_gold",  # 新增：字幕颜色主题
 ) -> str:
     """
     从静态图片快速生成视频 - 使用FFmpeg直接处理，速度提升10倍以上
@@ -682,7 +684,13 @@ def generate_video_from_image_fast(
             # 根据主题设置不同的样式
             if video_theme == 'ancient_scroll':
                 # 古书卷轴：竖排标题在右侧垂直居中
-                logger.info("  - 使用古书卷轴样式：竖排标题（垂直居中） + 金色文字")
+                logger.info("  - 使用古书卷轴样式：竖排标题（垂直居中）")
+                
+                # 获取颜色主题配置
+                theme_colors = get_subtitle_theme_colors(subtitle_color_theme)
+                title_color = theme_colors['title']['color']
+                title_stroke = theme_colors['title']['stroke']
+                logger.info(f"  - 颜色主题: {subtitle_color_theme}, 标题颜色: {title_color}")
                 
                 # 将标题拆分成单个字符，竖排显示
                 chars = list(title_text)
@@ -696,8 +704,8 @@ def generate_video_from_image_fast(
                 # 为每个字符创建drawtext滤镜
                 for i, char in enumerate(chars):
                     y_pos = y_start + i * int(fontsize * 1.2)
-                    # 古书卷轴风格：棕色文字 + 金色描边
-                    char_filter = f"drawtext=text='{char}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor=#8B4513:borderw=2:bordercolor=#FFD700"
+                    # 使用主题颜色
+                    char_filter = f"drawtext=text='{char}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor={title_color}:borderw=2:bordercolor={title_stroke}"
                     video_filters.append(char_filter)
                 
                 # 添加竖排字幕（如果有字幕文件）
@@ -777,6 +785,9 @@ def generate_video_from_image_fast(
                         
                         # 添加字符到当前屏
                         current_screen_chars.extend(chars)
+                        # 在每句字幕之间添加一个空格作为分隔符（除了最后一句）
+                        if idx < len(subtitles) - 1:
+                            current_screen_chars.append(' ')  # 添加空格分隔
                         current_screen_end = parse_time(end_time)
                         
                         # 如果当前屏字符数达到上限，或者是最后一个字幕，保存这一屏
@@ -797,9 +808,13 @@ def generate_video_from_image_fast(
                     
                     logger.info(f"  - 共分为 {len(screens)} 屏显示")
                     
-                    # 为每一屏创建drawtext滤镜（带时间控制）
+                    # 为每一屏创建drawtext滤镜（带时间控制和三色高亮效果）
                     for screen_idx, (start_time, end_time, chars_list) in enumerate(screens):
                         logger.info(f"  - 第{screen_idx + 1}屏: {start_time:.1f}s - {end_time:.1f}s，{len(chars_list)}个字符")
+                        
+                        # 计算每个字符的时间（均匀分配）
+                        screen_duration = end_time - start_time
+                        char_duration = screen_duration / len(chars_list) if len(chars_list) > 0 else screen_duration
                         
                         # 将这一屏的字符排列成多列（从右向左，确保覆盖整个区域）
                         char_index = 0
@@ -819,12 +834,36 @@ def generate_video_from_image_fast(
                                 char = chars_list[char_index]
                                 y_pos = subtitle_y_start + row * int(subtitle_fontsize * char_spacing)
                                 
-                                # 竖排字幕：金色文字 + 棕色描边
+                                # 计算当前字符的时间范围
+                                char_start_time = start_time + char_index * char_duration
+                                char_end_time = char_start_time + char_duration
+                                
+                                # 三色高亮效果：使用颜色主题
                                 if char.strip():  # 跳过空格
                                     char_escaped = char.replace("'", "").replace('"', '')
-                                    # 添加时间控制：enable='between(t,start_time,end_time)'
-                                    subtitle_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor=#FFD700:borderw=2:bordercolor=#8B4513:enable='between(t,{start_time},{end_time})'"
-                                    video_filters.append(subtitle_filter)
+                                    
+                                    # 获取主题颜色
+                                    unread_color = theme_colors['unread']['color']
+                                    unread_stroke = theme_colors['unread']['stroke']
+                                    reading_color = theme_colors['reading']['color']
+                                    reading_stroke = theme_colors['reading']['stroke']
+                                    read_color = theme_colors['read']['color']
+                                    read_stroke = theme_colors['read']['stroke']
+                                    
+                                    # 1. 未读状态（从屏幕开始到当前字开始朗读）
+                                    if char_start_time > start_time:
+                                        unread_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor={unread_color}:borderw=2:bordercolor={unread_stroke}:enable='between(t,{start_time},{char_start_time})'"
+                                        video_filters.append(unread_filter)
+                                    
+                                    # 2. 正在读状态：高亮颜色+略微放大（当前字正在朗读时）
+                                    reading_fontsize = int(subtitle_fontsize * 1.1)  # 放大10%
+                                    reading_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={reading_fontsize}:fontcolor={reading_color}:borderw=2:bordercolor={reading_stroke}:enable='between(t,{char_start_time},{char_end_time})'"
+                                    video_filters.append(reading_filter)
+                                    
+                                    # 3. 已读状态（当前字读完到屏幕结束）
+                                    if char_end_time < end_time:
+                                        read_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor={read_color}:borderw=2:bordercolor={read_stroke}:enable='between(t,{char_end_time},{end_time})'"
+                                        video_filters.append(read_filter)
                                 
                                 char_index += 1
                             

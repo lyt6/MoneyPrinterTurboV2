@@ -713,8 +713,11 @@ def create_bamboo_scroll_subtitles(
     
     all_clips = []
     
-    # 将所有字幕文本连接起来
-    all_text = "".join([item[1].strip() for item in subtitle_items])
+    # 将所有字幕文本连接起来，在每句之间添加空格分隔
+    text_parts = []
+    for item in subtitle_items:
+        text_parts.append(item[1].strip())
+    all_text = " ".join(text_parts)  # 使用空格连接每句，作为分隔符
     total_chars = len(all_text)
     
     # 计算字符到时间的映射
@@ -730,6 +733,11 @@ def create_bamboo_scroll_subtitles(
             char_start = start_time + i * char_duration
             char_end = char_start + char_duration
             char_to_time[char_index] = (char_start, char_end)
+            char_index += 1
+        
+        # 为空格分隔符分配时间（使用当前句子的结束时间）
+        if char_index < total_chars:  # 如果还有空格分隔符
+            char_to_time[char_index] = (end_time, end_time)  # 空格不显示，时间为0
             char_index += 1
     
     # 从右向左排列字符（使用线性插值确保精确覆盖整个区域）
@@ -762,7 +770,7 @@ def create_bamboo_scroll_subtitles(
                 text=char,
                 font=font_path,
                 font_size=font_size,
-                color="#808080",  # 灰色
+                color="#000000",  # 黑色
                 stroke_color=stroke_color,
                 stroke_width=stroke_width,
             )

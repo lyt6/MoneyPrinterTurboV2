@@ -1065,6 +1065,52 @@ with right_panel:
         }
         st.caption(theme_descriptions.get(params.video_theme, ""))
         
+        # 古书卷轴主题：显示颜色主题选择
+        if params.video_theme == "ancient_scroll":
+            from app.config.subtitle_themes import get_all_theme_names, SUBTITLE_COLOR_THEMES
+            
+            st.write("**" + tr("Color Theme") + " 🎨**")
+            
+            # 获取所有主题
+            all_themes = get_all_theme_names()
+            theme_options = [name for key, name in all_themes]
+            theme_keys = [key for key, name in all_themes]
+            
+            # 从配置中获取已保存的主题
+            saved_color_theme = config.ui.get("subtitle_color_theme", "classic_gold")
+            saved_theme_index = 0
+            for i, key in enumerate(theme_keys):
+                if key == saved_color_theme:
+                    saved_theme_index = i
+                    break
+            
+            selected_color_theme_index = st.selectbox(
+                tr("Subtitle Color Theme"),
+                options=range(len(theme_options)),
+                index=saved_theme_index,
+                format_func=lambda x: f"{theme_options[x]} - {SUBTITLE_COLOR_THEMES[theme_keys[x]]['description']}",
+                help=tr("Choose color scheme for subtitle states: unread, reading, and read"),
+                key="subtitle_color_theme_select"
+            )
+            
+            params.subtitle_color_theme = theme_keys[selected_color_theme_index]
+            config.ui["subtitle_color_theme"] = params.subtitle_color_theme
+            
+            # 显示颜色预览
+            theme_config = SUBTITLE_COLOR_THEMES[params.subtitle_color_theme]
+            st.markdown(f"""
+            <div style="padding: 10px; border-radius: 5px; background: #f0f0f0;">
+                <b>颜色预览:</b><br/>
+                <span style="color: {theme_config['unread']['color']}; text-shadow: 1px 1px {theme_config['unread']['stroke']}; font-size: 16px;">■</span> 未读 ({theme_config['unread']['color']})<br/>
+                <span style="color: {theme_config['reading']['color']}; text-shadow: 1px 1px {theme_config['reading']['stroke']}; font-size: 20px; font-weight: bold;">■</span> 正在读 ({theme_config['reading']['color']}, 放大)<br/>
+                <span style="color: {theme_config['read']['color']}; text-shadow: 1px 1px {theme_config['read']['stroke']}; font-size: 16px;">■</span> 已读 ({theme_config['read']['color']})<br/>
+                <span style="color: {theme_config['title']['color']}; text-shadow: 1px 1px {theme_config['title']['stroke']}; font-size: 18px; font-weight: bold;">■</span> 标题 ({theme_config['title']['color']})
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            # 其他主题使用默认颜色配置
+            params.subtitle_color_theme = "classic_gold"
+        
         # 🎨 主题布局预览
         st.write("**" + tr("Layout Preview") + "**")
         
@@ -1098,15 +1144,17 @@ with right_panel:
             # 比例变化时，重置字幕边界为新比例的默认值
             if aspect == "9:16":  # 竖屏
                 st.session_state.subtitle_left = 10
-                st.session_state.subtitle_right = 80
+                st.session_state.subtitle_right = 70  # 竖屏70%
             else:  # 横屏
                 st.session_state.subtitle_left = 18
-                st.session_state.subtitle_right = 72
+                st.session_state.subtitle_right = 80  # 横屏80%
+            # 重置标题位置
+            st.session_state.title_left = 85
         
         if "title_top" not in st.session_state:
-            st.session_state.title_top = 12  # 标题默认上边界
+            st.session_state.title_top = 12  # 标题默认上边界（将基于此计算垂直居中）
         if "title_left" not in st.session_state:
-            st.session_state.title_left = 75  # 标题默认左边界
+            st.session_state.title_left = 85  # 标题默认左边界（85%）
         if "subtitle_top" not in st.session_state:
             st.session_state.subtitle_top = 12  # 字幕默认上边界
         if "subtitle_bottom" not in st.session_state:
@@ -1120,18 +1168,18 @@ with right_panel:
         if "subtitle_right" not in st.session_state:
             # 根据视频比例设置默认值
             if aspect == "9:16":  # 竖屏
-                st.session_state.subtitle_right = 80  # 字幕默认右边界（竖屏）
+                st.session_state.subtitle_right = 70  # 字幕默认右边界（竖屏）70%）
             else:  # 横屏
-                st.session_state.subtitle_right = 72  # 字幕默认右边界（横屏）
+                st.session_state.subtitle_right = 80  # 字幕默认右边界（横屏，80%）
         
         # 根据不同主题显示不同的布局调节选项
         if params.video_theme == "ancient_scroll":
             # 古书卷轴：支持水平和垂直位置调整
             # 根据视频比例显示不同的提示
             if aspect == "9:16":  # 竖屏
-                layout_hint = tr("Ancient Scroll Layout: Title at 75% horizontal, Subtitle columns 10%-80% (Portrait)")
+                layout_hint = tr("Ancient Scroll Layout: Title at 85% horizontal (centered vertically), Subtitle columns 10%-70% (Portrait)")
             else:  # 横屏
-                layout_hint = tr("Ancient Scroll Layout: Title at 75% horizontal, Subtitle columns 18%-72%")
+                layout_hint = tr("Ancient Scroll Layout: Title at 85% horizontal (centered vertically), Subtitle columns 18%-80%")
             st.caption("🎋 " + layout_hint)
             
             # 显示调节模式选择
@@ -1154,7 +1202,7 @@ with right_panel:
                         value=st.session_state.title_x_offset,
                         step=1,
                         key="theme_title_x_offset",
-                        help=tr("Adjust title horizontal position. Base position: 75%")
+                        help=tr("Adjust title horizontal position. Base position: 85%")
                     )
                     st.session_state.title_x_offset = title_x_offset
                 
@@ -1166,7 +1214,7 @@ with right_panel:
                         value=st.session_state.subtitle_x_offset,
                         step=1,
                         key="theme_subtitle_x_offset",
-                        help=tr("Adjust subtitle horizontal position. Base: 22%-65%")
+                        help=tr("Adjust subtitle horizontal position. Base: 18%-80% (landscape) or 10%-70% (portrait)")
                     )
                     st.session_state.subtitle_x_offset = subtitle_x_offset
                 
@@ -1180,7 +1228,7 @@ with right_panel:
                         value=st.session_state.title_y_offset,
                         step=5,
                         key="theme_title_offset",
-                        help=tr("Adjust title vertical position. Base position: 12%")
+                        help=tr("Adjust title vertical position. Base: vertically centered")
                     )
                     st.session_state.title_y_offset = title_offset
                 
@@ -1196,23 +1244,30 @@ with right_panel:
                     )
                     st.session_state.subtitle_y_offset = subtitle_offset
                 
-                # 显示实际位置
-                actual_title_x = 75 + title_x_offset
-                actual_title_y = 12 + title_offset
-                actual_subtitle_left = 22 + subtitle_x_offset
-                actual_subtitle_right = 65 + subtitle_x_offset
+                # 显示实际位置（根据视频比例）
+                actual_title_x = 85 + title_x_offset
+                if aspect == "9:16":  # 竖屏
+                    actual_subtitle_left = 10 + subtitle_x_offset
+                    actual_subtitle_right = 70 + subtitle_x_offset
+                else:  # 横屏
+                    actual_subtitle_left = 18 + subtitle_x_offset
+                    actual_subtitle_right = 80 + subtitle_x_offset
                 actual_subtitle_y = 12 + subtitle_offset
                 st.info(
                     f"📍 {tr('Actual positions')}: "
-                    f"{tr('Title')} ({actual_title_x}%, {actual_title_y}%), "
+                    f"{tr('Title')} ({actual_title_x}%, 垂直居中+{title_offset}%), "
                     f"{tr('Subtitle')} ({actual_subtitle_left}%-{actual_subtitle_right}%, {actual_subtitle_y}%)"
                 )
                 
                 # 使用偏移量计算边界
-                st.session_state.title_left = 75 + title_x_offset
-                st.session_state.title_top = 12 + title_offset
-                st.session_state.subtitle_left = 22 + subtitle_x_offset
-                st.session_state.subtitle_right = 65 + subtitle_x_offset
+                st.session_state.title_left = 85 + title_x_offset
+                st.session_state.title_top = 12 + title_offset  # 注：实际使用时会基于此计算垂直居中
+                if aspect == "9:16":  # 竖屏
+                    st.session_state.subtitle_left = 10 + subtitle_x_offset
+                    st.session_state.subtitle_right = 70 + subtitle_x_offset
+                else:  # 横屏
+                    st.session_state.subtitle_left = 18 + subtitle_x_offset
+                    st.session_state.subtitle_right = 80 + subtitle_x_offset
                 st.session_state.subtitle_top = 12 + subtitle_offset
                 
             else:  # 精确边界模式
@@ -1224,12 +1279,12 @@ with right_panel:
                 with col1:
                     title_left = st.slider(
                         "标题左边界 (%)",
-                        min_value=60,
+                        min_value=70,
                         max_value=95,
                         value=st.session_state.title_left,
                         step=1,
                         key="title_left_boundary",
-                        help="标题在视频中的水平位置（左边界）"
+                        help="标题在视频中的水平位置（左边界，默认85%）"
                     )
                     st.session_state.title_left = title_left
                 
@@ -1264,11 +1319,11 @@ with right_panel:
                     subtitle_right = st.slider(
                         "字幕右边界 (%)",
                         min_value=50,
-                        max_value=82,
+                        max_value=85,
                         value=st.session_state.subtitle_right,
                         step=1,
                         key="subtitle_right_boundary",
-                        help="字幕区域的右边界位置（建议不超过75%避免与标题重叠）"
+                        help="字幕区域的右边界位置（横屏80%，竖屏70%，与85%的标题保持5%间距）"
                     )
                     st.session_state.subtitle_right = subtitle_right
                 
@@ -1421,14 +1476,15 @@ with right_panel:
                 """
             
             elif theme == "ancient_scroll":
-                # 古书卷轴：标题右上角竖排，字幕竖排多列（使用边界参数）
+                # 古书卷轴：标题右侧垂直居中，字幕竖排多列（使用边界参数）
                 subtitle_width = subtitle_right - subtitle_left
                 subtitle_height = subtitle_bottom - subtitle_top
                 html += f"""
                 <div style="
                     position: absolute;
-                    top: {title_top}%;
+                    top: 50%;
                     left: {title_left}%;
+                    transform: translateY(-50%);
                     writing-mode: vertical-rl;
                     color: #8B4513;
                     background: rgba(255,215,0,0.2);
