@@ -679,29 +679,37 @@ def create_bamboo_scroll_subtitles(
     if video_duration is None:
         video_duration = subtitle_items[-1][0][1] if subtitle_items else 10
     
-    # 根据记忆中的规范：字幕区域 22%-65%，与标题上边界对齐 12%
-    # 应用水平和垂直偏移量
-    base_left = 0.22 + (x_offset / 100.0)
-    base_right = 0.65 + (x_offset / 100.0)
-    base_y = 0.12 + (y_offset / 100.0)
+    # 判断视频方向（根据快速模式优化）
+    is_portrait = video_height > video_width  # 竖屏
+    
+    if is_portrait:
+        # 竖屏（9:16）：字体更大，列数更少，列间距适中
+        base_left = 0.10 + (x_offset / 100.0)
+        base_right = 0.70 + (x_offset / 100.0)
+        base_y = 0.12 + (y_offset / 100.0)
+        column_spacing_multiplier = 1.5  # 列间距倍数：1.5倍字体大小
+        max_columns = 6  # 6列
+    else:
+        # 横屏（16:9）：字体适中，更多列，列间距更小
+        base_left = 0.18 + (x_offset / 100.0)
+        base_right = 0.80 + (x_offset / 100.0)  # 80%（水平离标题更近）
+        base_y = 0.12 + (y_offset / 100.0)
+        column_spacing_multiplier = 0.75  # 列间距倍数：0.75倍字体大小（减半）
+        max_columns = 15  # 15列（列间距减半后可放更多列）
     
     left_boundary = int(video_width * base_left)   # 左边界
     right_boundary = int(video_width * base_right)  # 右边界
     y_start = int(video_height * base_y)            # 上边界
     
-    # 计算每列可容纳的最大字数（根据记忆：字符间距 = 字体大小 + 8像素）
-    char_spacing = font_size + 8
+    # 计算每列可容纳的最大字数（使用1.4倍字符间距）
+    char_spacing = int(font_size * 1.4)
     available_height = video_height * 0.76  # 12%-88%区域
     max_chars_per_column = int(available_height / char_spacing)
     
-    # 计算列间距（根据记忆：字体大小的 2.2 倍）
-    column_spacing = int(font_size * 2.2)
+    # 计算列间距（根据视频比例使用不同的倍数）
+    column_spacing = int(font_size * column_spacing_multiplier)
     
-    # 计算可容纳的总列数
-    available_width = right_boundary - left_boundary
-    max_columns = int(available_width / column_spacing)
-    
-    logger.info(f"🎋 竖简布局: 每列{max_chars_per_column}字, 最多{max_columns}列, 区域{left_boundary}-{right_boundary}px, Y偏移{y_offset}%")
+    logger.info(f"🎋 竖简布局: {'9:16 竖屏' if is_portrait else '16:9 横屏'}, 每列{max_chars_per_column}字, {max_columns}列, 区域{left_boundary}-{right_boundary}px")
     
     all_clips = []
     
@@ -724,14 +732,18 @@ def create_bamboo_scroll_subtitles(
             char_to_time[char_index] = (char_start, char_end)
             char_index += 1
     
-    # 从右向左排列字符
+    # 从右向左排列字符（使用线性插值确保精确覆盖整个区域）
     char_index = 0
     for col in range(max_columns):
         if char_index >= total_chars:
             break
         
-        # 计算当前列的 x 位置（从右到左）
-        x_position = right_boundary - col * column_spacing
+        # 计算当前列的 x 位置（从右到左，使用线性插值）
+        if max_columns > 1:
+            # 线性插值：从右(right_boundary)到左(left_boundary)
+            x_position = right_boundary - int((right_boundary - left_boundary) * col / (max_columns - 1))
+        else:
+            x_position = right_boundary
         
         # 填充当前列
         for row in range(max_chars_per_column):
@@ -1003,7 +1015,7 @@ def create_title_clips_for_theme(theme, title_text, font_path, video_width, vide
         return [title_clip]
         
     elif theme == VideoTheme.ancient_scroll.value:
-        # 古书卷轴：右上角竖排，全程显示（根据记忆：75%位置，12%上边界）
+        # 古书卷轴：右侧竖排，垂直居中，全程显示
         # 应用水平和垂直偏移量
         title_font_size = int(base_font_size * 1.2)
         title_stroke_width = int(stroke_width * 1.5)
@@ -1013,13 +1025,16 @@ def create_title_clips_for_theme(theme, title_text, font_path, video_width, vide
         char_clips = []
         
         # 应用偏移量（百分比）
-        base_x = 0.75 + (title_x_offset / 100.0)
-        base_y = 0.12 + (title_y_offset / 100.0)
+        base_x = 0.85 + (title_x_offset / 100.0)  # 85%位置 + 偏移
         
-        x_position = int(video_width * base_x)   # 75%位置 + 偏移，与字幕区域协调
-        y_start = int(video_height * base_y)      # 12%上边界 + 偏移，与字幕对齐
+        x_position = int(video_width * base_x)
         
-        logger.info(f"🎋 古书卷轴标题: X={base_x*100:.1f}%, Y={base_y*100:.1f}%")
+        # 计算标题总高度并垂直居中
+        char_height = title_font_size + 5
+        title_height = len(chars) * char_height
+        y_start = int((video_height - title_height) / 2) + int(video_height * (title_y_offset / 100.0))  # 垂直居中 + 偏移
+        
+        logger.info(f"🎋 古书卷轴标题: X={base_x*100:.1f}%, Y=垂直居中")
         
         for i, char in enumerate(chars):
             char_clip = TextClip(
@@ -1031,7 +1046,7 @@ def create_title_clips_for_theme(theme, title_text, font_path, video_width, vide
                 stroke_width=title_stroke_width,
             )
             
-            y_position = int(y_start + i * (title_font_size + 5))
+            y_position = int(y_start + i * char_height)
             char_clip = char_clip.with_duration(video_duration)
             char_clip = char_clip.with_start(0)
             char_clip = char_clip.with_position((x_position, y_position))

@@ -1087,7 +1087,22 @@ with right_panel:
         if "subtitle_x_offset" not in st.session_state:
             st.session_state.subtitle_x_offset = 0
         
-        # 初始化边界参数（与偏移量分开）
+        # 初始化边界参数（根据视频比例自适应）
+        # 检测视频比例变化，重置字幕边界
+        if "last_video_aspect" not in st.session_state:
+            st.session_state.last_video_aspect = aspect
+        
+        aspect_changed = st.session_state.last_video_aspect != aspect
+        if aspect_changed:
+            st.session_state.last_video_aspect = aspect
+            # 比例变化时，重置字幕边界为新比例的默认值
+            if aspect == "9:16":  # 竖屏
+                st.session_state.subtitle_left = 10
+                st.session_state.subtitle_right = 80
+            else:  # 横屏
+                st.session_state.subtitle_left = 18
+                st.session_state.subtitle_right = 72
+        
         if "title_top" not in st.session_state:
             st.session_state.title_top = 12  # 标题默认上边界
         if "title_left" not in st.session_state:
@@ -1097,14 +1112,27 @@ with right_panel:
         if "subtitle_bottom" not in st.session_state:
             st.session_state.subtitle_bottom = 88  # 字幕默认下边界（88%，即距顶部88%）
         if "subtitle_left" not in st.session_state:
-            st.session_state.subtitle_left = 22  # 字幕默认左边界
+            # 根据视频比例设置默认值
+            if aspect == "9:16":  # 竖屏
+                st.session_state.subtitle_left = 10  # 字幕默认左边界（竖屏）
+            else:  # 横屏
+                st.session_state.subtitle_left = 18  # 字幕默认左边界（横屏）
         if "subtitle_right" not in st.session_state:
-            st.session_state.subtitle_right = 65  # 字幕默认右边界
+            # 根据视频比例设置默认值
+            if aspect == "9:16":  # 竖屏
+                st.session_state.subtitle_right = 80  # 字幕默认右边界（竖屏）
+            else:  # 横屏
+                st.session_state.subtitle_right = 72  # 字幕默认右边界（横屏）
         
         # 根据不同主题显示不同的布局调节选项
         if params.video_theme == "ancient_scroll":
             # 古书卷轴：支持水平和垂直位置调整
-            st.caption("🎋 " + tr("Ancient Scroll Layout: Title at 75% horizontal, Subtitle columns 22%-65%"))
+            # 根据视频比例显示不同的提示
+            if aspect == "9:16":  # 竖屏
+                layout_hint = tr("Ancient Scroll Layout: Title at 75% horizontal, Subtitle columns 10%-80% (Portrait)")
+            else:  # 横屏
+                layout_hint = tr("Ancient Scroll Layout: Title at 75% horizontal, Subtitle columns 18%-72%")
+            st.caption("🎋 " + layout_hint)
             
             # 显示调节模式选择
             layout_mode = st.radio(

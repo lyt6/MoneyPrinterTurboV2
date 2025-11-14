@@ -627,7 +627,12 @@ def generate_video_from_image_fast(
         
         # 1. 字幕滤镜
         if subtitle_file and os.path.exists(subtitle_file):
-            if has_subtitle_filter:
+            # 古书卷轴主题：使用竖排多列字幕，不使用subtitles滤镜
+            if video_theme == 'ancient_scroll':
+                logger.info("  - 古书卷轴模式：将在后续添加竖排字幕")
+                # 竖排字幕将通过drawtext单独渲染，不在这里处理
+                pass
+            elif has_subtitle_filter:
                 # 方案1：使用subtitles滤镜（支持ASS/SRT格式）
                 logger.debug("  使用subtitles滤镜渲染字幕")
                 # 转义字幕文件路径（Windows和特殊字符）
@@ -676,14 +681,17 @@ def generate_video_from_image_fast(
             
             # 根据主题设置不同的样式
             if video_theme == 'ancient_scroll':
-                # 古书卷轴：竖排标题在右上角
-                logger.info("  - 使用古书卷轴样式：竖排标题 + 金色文字")
+                # 古书卷轴：竖排标题在右侧垂直居中
+                logger.info("  - 使用古书卷轴样式：竖排标题（垂直居中） + 金色文字")
                 
                 # 将标题拆分成单个字符，竖排显示
                 chars = list(title_text)
                 fontsize = int(video_height * 0.05)  # 5%高度
                 x_pos = int(video_width * 0.85)  # 右侧85%位置
-                y_start = int(video_height * 0.12)  # 从12%开始
+                
+                # 计算标题总高度并垂直居中
+                title_height = len(chars) * int(fontsize * 1.2)
+                y_start = int((video_height - title_height) / 2)  # 垂直居中
                 
                 # 为每个字符创建drawtext滤镜
                 for i, char in enumerate(chars):
@@ -691,6 +699,137 @@ def generate_video_from_image_fast(
                     # 古书卷轴风格：棕色文字 + 金色描边
                     char_filter = f"drawtext=text='{char}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor=#8B4513:borderw=2:bordercolor=#FFD700"
                     video_filters.append(char_filter)
+                
+                # 添加竖排字幕（如果有字幕文件）
+                if subtitle_file and os.path.exists(subtitle_file):
+                    logger.info("  - 添加竖排字幕（古书卷轴样式 - 分屏显示）")
+                    # 解析SRT字幕文件
+                    import re
+                    with open(subtitle_file, 'r', encoding='utf-8') as f:
+                        srt_content = f.read()
+                    
+                    # SRT格式：序号\n时间戳\n文本\n空行
+                    subtitle_pattern = r'(\d+)\s+([\d:,]+)\s+-->\s+([\d:,]+)\s+([\s\S]+?)(?=\n\n|\n*$)'
+                    subtitles = re.findall(subtitle_pattern, srt_content)
+                    
+                    # 古书卷轴字幕参数（根据视频比例自适应）
+                    # 判断视频方向
+                    is_portrait = video_height > video_width  # 竖屏
+                    
+                    if is_portrait:
+                        # 竖屏（9:16）：字体更大，列数更少，列间距适中
+                        subtitle_fontsize = int(video_height * 0.035)  # 3.5%高度
+                        column_count = 6  # 6列
+                        column_spacing_multiplier = 1.5  # 列间距倍数：1.5倍字体大小
+                        subtitle_left = int(video_width * 0.10)  # 左边界10%
+                        subtitle_right = int(video_width * 0.70)  # 右边界70%（离标题更近）
+                        subtitle_y_start = int(video_height * 0.12)  # 竖屏：从12%开始（与标题靠近）
+                    else:
+                        # 横屏（16:9）：字体适中，更多列，列间距更小
+                        subtitle_fontsize = int(video_height * 0.04)  # 4%高度
+                        column_count = 15  # 15列（列间距减半后可放更多列）
+                        column_spacing_multiplier = 0.75  # 列间距倍数：0.75倍字体大小（减半）
+                        subtitle_left = int(video_width * 0.18)  # 左边界18%
+                        subtitle_right = int(video_width * 0.80)  # 右边界80%（水平离标题更近）
+                        subtitle_y_start = int(video_height * 0.12)  # 横屏：从12%开始（恢复原位置）
+                    
+                    # 计算每列可容纳的字符数（根据视频比例计算可用高度）
+                    if is_portrait:
+                        # 竖屏：88% - 12% = 76%可用高度
+                        available_height = int(video_height * 0.76)
+                    else:
+                        # 横屏：88% - 12% = 76%可用高度（恢复原高度）
+                        available_height = int(video_height * 0.76)
+                    
+                    char_spacing = 1.4  # 字符间距倍数（缩小间距，增加容量）
+                    chars_per_column = int(available_height / (subtitle_fontsize * char_spacing))
+                    
+                    # 计算列间距（根据视频比例使用不同的倍数）
+                    available_width = subtitle_right - subtitle_left
+                    column_spacing = int(subtitle_fontsize * column_spacing_multiplier)
+                    
+                    logger.info(f"  - 视频比例: {'9:16 竖屏' if is_portrait else '16:9 横屏'}")
+                    logger.info(f"  - 字幕布局: {column_count}列，字体大小{subtitle_fontsize}px，字符间距{char_spacing}x")
+                    
+                    # 计算每屏可显示的总字符数
+                    chars_per_screen = chars_per_column * column_count
+                    logger.info(f"  - 每屏可显示 {chars_per_screen} 个字符（{column_count}列 × {chars_per_column}字/列）")
+                    
+                    # 将字幕按时间和字符数分组成多屏
+                    screens = []  # [(start_time, end_time, chars_list)]
+                    current_screen_chars = []
+                    current_screen_start = None
+                    current_screen_end = None
+                    
+                    def parse_time(time_str):
+                        """将SRT时间格式转换为秒数"""
+                        h, m, s = time_str.replace(',', '.').split(':')
+                        return float(h) * 3600 + float(m) * 60 + float(s)
+                    
+                    for idx, (num, start_time, end_time, text) in enumerate(subtitles):
+                        # 清理文本
+                        clean_text = text.strip().replace('\n', '').replace('\r', '')
+                        chars = list(clean_text)
+                        
+                        # 如果是第一个字幕或者当前屏已满，开始新屏
+                        if current_screen_start is None:
+                            current_screen_start = parse_time(start_time)
+                        
+                        # 添加字符到当前屏
+                        current_screen_chars.extend(chars)
+                        current_screen_end = parse_time(end_time)
+                        
+                        # 如果当前屏字符数达到上限，或者是最后一个字幕，保存这一屏
+                        if len(current_screen_chars) >= chars_per_screen or idx == len(subtitles) - 1:
+                            if current_screen_chars:
+                                screens.append((
+                                    current_screen_start,
+                                    current_screen_end,
+                                    current_screen_chars[:chars_per_screen]  # 截取最多chars_per_screen个字符
+                                ))
+                                # 如果还有剩余字符，开始下一屏
+                                if len(current_screen_chars) > chars_per_screen:
+                                    current_screen_chars = current_screen_chars[chars_per_screen:]
+                                    current_screen_start = current_screen_end
+                                else:
+                                    current_screen_chars = []
+                                    current_screen_start = None
+                    
+                    logger.info(f"  - 共分为 {len(screens)} 屏显示")
+                    
+                    # 为每一屏创建drawtext滤镜（带时间控制）
+                    for screen_idx, (start_time, end_time, chars_list) in enumerate(screens):
+                        logger.info(f"  - 第{screen_idx + 1}屏: {start_time:.1f}s - {end_time:.1f}s，{len(chars_list)}个字符")
+                        
+                        # 将这一屏的字符排列成多列（从右向左，确保覆盖整个区域）
+                        char_index = 0
+                        for col in range(column_count):
+                            # 从右向左排列：第0列在最右侧，最后一列在最左侧
+                            # 使用线性插值确保均匀分布在 subtitle_left 到 subtitle_right 之间
+                            if column_count > 1:
+                                # 线性插值：从右(subtitle_right)到左(subtitle_left)
+                                x_pos = subtitle_right - int((subtitle_right - subtitle_left) * col / (column_count - 1))
+                            else:
+                                x_pos = subtitle_right
+                            
+                            for row in range(chars_per_column):
+                                if char_index >= len(chars_list):
+                                    break
+                                
+                                char = chars_list[char_index]
+                                y_pos = subtitle_y_start + row * int(subtitle_fontsize * char_spacing)
+                                
+                                # 竖排字幕：金色文字 + 棕色描边
+                                if char.strip():  # 跳过空格
+                                    char_escaped = char.replace("'", "").replace('"', '')
+                                    # 添加时间控制：enable='between(t,start_time,end_time)'
+                                    subtitle_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor=#FFD700:borderw=2:bordercolor=#8B4513:enable='between(t,{start_time},{end_time})'"
+                                    video_filters.append(subtitle_filter)
+                                
+                                char_index += 1
+                            
+                            if char_index >= len(chars_list):
+                                break
                 
             elif video_theme == 'modern_book':
                 # 现代图书：标题在正中间
