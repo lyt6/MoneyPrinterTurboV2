@@ -1190,12 +1190,22 @@ def tts(
             return None
     elif is_gtts_voice(voice_name):
         # 格式: gtts:zh-CN-Female-Chinese (Simplified)
-        parts = voice_name.split("-")
-        if len(parts) >= 2:
-            lang = f"{parts[0].replace('gtts:', '')}-{parts[1]}"  # zh-CN, en-US 等
-            return gtts_tts(text, lang, voice_rate, voice_file)
-        else:
-            logger.error(f"Invalid gTTS voice name format: {voice_name}")
+        # 提取语言代码部分 (zh-CN, en-US 等)
+        try:
+            # 移除 'gtts:' 前缀
+            voice_part = voice_name.replace('gtts:', '')
+            # 提取语言代码：格式为 "zh-CN-Female..." 或 "en-US-Female..."
+            # 取前两部分作为语言代码
+            parts = voice_part.split('-')
+            if len(parts) >= 2:
+                lang = f"{parts[0]}-{parts[1]}"  # zh-CN, en-US 等
+                logger.info(f"gTTS language: {lang}")
+                return gtts_tts(text, lang, voice_rate, voice_file)
+            else:
+                logger.error(f"Invalid gTTS voice name format: {voice_name}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to parse gTTS voice name: {voice_name}, error: {e}")
             return None
     elif is_pyttsx3_voice(voice_name):
         # 格式: pyttsx3:en-US-0-Male-David

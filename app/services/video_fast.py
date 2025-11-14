@@ -644,6 +644,36 @@ def generate_video_from_image_fast(
             # 转义文本中的特殊字符
             title_text = video_subject.replace("'", "").replace('"', '').replace(':', '').replace('\\', '')
             
+            # 获取字体文件路径（支持中文字符）
+            from app.config import config
+            font_name = config.ui.get('font_name', 'STHeitiMedium.ttc')
+            # 获取项目根目录（正确的路径计算方式）
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            font_dir = os.path.join(project_root, 'resource', 'fonts')
+            font_path = os.path.join(font_dir, font_name)
+            
+            # 如果字体文件不存在，尝试使用系统默认中文字体
+            if not os.path.exists(font_path):
+                logger.warning(f"  ⚠️  字体文件不存在: {font_path}")
+                # Mac系统默认中文字体
+                import platform
+                if platform.system() == 'Darwin':  # macOS
+                    # 尝试使用系统中文字体
+                    system_fonts = [
+                        '/System/Library/Fonts/STHeiti Light.ttc',
+                        '/System/Library/Fonts/STHeiti Medium.ttc',
+                        '/System/Library/Fonts/PingFang.ttc',
+                        '/Library/Fonts/Arial Unicode.ttf',
+                    ]
+                    for sys_font in system_fonts:
+                        if os.path.exists(sys_font):
+                            font_path = sys_font
+                            logger.info(f"  ✓ 使用系统字体: {sys_font}")
+                            break
+            
+            # 转义字体路径（FFmpeg要求）
+            font_path_escaped = font_path.replace('\\', '/').replace(':', '\\:')
+            
             # 根据主题设置不同的样式
             if video_theme == 'ancient_scroll':
                 # 古书卷轴：竖排标题在右上角
@@ -659,7 +689,7 @@ def generate_video_from_image_fast(
                 for i, char in enumerate(chars):
                     y_pos = y_start + i * int(fontsize * 1.2)
                     # 古书卷轴风格：棕色文字 + 金色描边
-                    char_filter = f"drawtext=text='{char}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor=#8B4513:borderw=2:bordercolor=#FFD700"
+                    char_filter = f"drawtext=text='{char}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor=#8B4513:borderw=2:bordercolor=#FFD700"
                     video_filters.append(char_filter)
                 
             elif video_theme == 'modern_book':
@@ -668,7 +698,7 @@ def generate_video_from_image_fast(
                 title_y = '(h-text_h)/2'
                 fontsize = int(video_height * 0.08)  # 8%高度
                 logger.info(f"  - 使用现代图书样式：标题居中")
-                drawtext_filter = f"drawtext=text='{title_text}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
+                drawtext_filter = f"drawtext=text='{title_text}':fontfile='{font_path_escaped}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
                 video_filters.append(drawtext_filter)
                 
             else:
@@ -676,7 +706,7 @@ def generate_video_from_image_fast(
                 title_x = '(w-text_w)/2'
                 title_y = 'h*0.1'
                 fontsize = int(video_height * 0.06)  # 6%高度
-                drawtext_filter = f"drawtext=text='{title_text}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
+                drawtext_filter = f"drawtext=text='{title_text}':fontfile='{font_path_escaped}':x={title_x}:y={title_y}:fontsize={fontsize}:fontcolor=white:borderw=3:bordercolor=black"
                 video_filters.append(drawtext_filter)
         
         # 合并所有视频滤镜

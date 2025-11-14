@@ -763,7 +763,18 @@ with middle_panel:
             filtered_voices = voice.get_pyttsx3_voices()
         else:
             # 获取Azure的声音列表
-            all_voices = voice.get_all_azure_voices(filter_locals=None)
+            # 默认只显示中文语音（zh-CN），根据界面语言自动切换
+            ui_language = st.session_state.get("ui_language", "zh")
+            
+            # 根据界面语言设置默认过滤语言
+            if ui_language == "zh":
+                default_filter = ["zh-CN"]  # 默认显示中文语音
+            elif ui_language == "en":
+                default_filter = ["en-US", "en-GB"]  # 英文显示美英语音
+            else:
+                default_filter = None  # 其他语言显示全部
+            
+            all_voices = voice.get_all_azure_voices(filter_locals=default_filter)
 
             # 根据选择的TTS服务器筛选声音
             for v in all_voices:
