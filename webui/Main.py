@@ -620,6 +620,37 @@ with left_panel:
 with middle_panel:
     with st.container(border=True):
         st.write(tr("Video Settings"))
+        
+        # 先选择视频比例，因为背景选择需要根据比例来决定
+        video_aspect_ratios = [
+            (tr("Portrait") + " (1080x1920)", VideoAspect.portrait.value),
+            (tr("Portrait") + " 720p (720x1280)", VideoAspect.portrait_720p.value),
+            (tr("Landscape") + " (1920x1080)", VideoAspect.landscape.value),
+            (tr("Landscape") + " 720p (1280x720)", VideoAspect.landscape_720p.value),
+        ]
+        
+        # 从配置中获取上次保存的比例
+        saved_aspect = config.ui.get("video_aspect", VideoAspect.portrait.value)
+        saved_aspect_index = 0
+        for i, (_, aspect_val) in enumerate(video_aspect_ratios):
+            if aspect_val == saved_aspect:
+                saved_aspect_index = i
+                break
+        
+        selected_aspect_index = st.selectbox(
+            tr("Video Ratio"),
+            options=range(len(video_aspect_ratios)),
+            format_func=lambda x: video_aspect_ratios[x][0],
+            index=saved_aspect_index,
+        )
+        params.video_aspect = VideoAspect(video_aspect_ratios[selected_aspect_index][1])
+        # 保存到配置，以便背景选择可以使用
+        config.ui["video_aspect"] = params.video_aspect.value
+        
+        # 现在 params.video_aspect 已经赋值，可以用于背景选择
+        # 正确判断：检查是否包含 "9:16"（竖屏）
+        is_portrait = "9:16" in str(params.video_aspect.value)
+        
         video_concat_modes = [
             (tr("Sequential"), "sequential"),
             (tr("Random"), "random"),
@@ -648,11 +679,114 @@ with middle_panel:
         config.app["video_source"] = params.video_source
 
         if params.video_source == "local":
-            uploaded_files = st.file_uploader(
-                "Upload Local Files",
-                type=["mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png"],
-                accept_multiple_files=True,
-            )
+            # 判断是否是古书卷轴主题（使用保存的配置）
+            saved_theme = config.ui.get("video_theme", "modern_book")
+            is_ancient_scroll = saved_theme == "ancient_scroll"
+            
+            if is_ancient_scroll:
+                # 古书卷轴主题：提供默认背景选择
+                from app.config.background_themes import get_background_names, get_background_path
+                
+                st.write("**" + tr("Background Source") + " 🖼️**")
+                
+                # 直接使用当前的 is_portrait（已经在前面根据 params.video_aspect 计算好了）
+                # 添加调试信息确认比例
+                st.info(f"🔍 当前视频比例: {params.video_aspect.value} | is_portrait={is_portrait}")
+                
+                # 背景来源选择
+                bg_source_options = [(tr("Default Backgrounds"), "default"), (tr("Upload Custom"), "upload")]
+                
+                # 从 session_state 或配置中获取保存的选择
+                saved_bg_source = st.session_state.get("bg_source", "default")
+                saved_bg_source_index = 0 if saved_bg_source == "default" else 1
+                
+                bg_source_index = st.radio(
+                    tr("Select Background Source"),
+                    options=range(len(bg_source_options)),
+                    format_func=lambda x: bg_source_options[x][0],
+                    index=saved_bg_source_index,
+                    horizontal=True,
+                    key="bg_source_radio"
+                )
+                bg_source = bg_source_options[bg_source_index][1]
+                st.session_state["bg_source"] = bg_source
+                
+                if bg_source == "default":
+                    # 显示默认背景选择器
+                    
+                    # 检测视频比例是否变化，如果变化则重置背景选择
+                    aspect_key = "portrait" if is_portrait else "landscape"
+                    last_aspect_key = st.session_state.get("last_bg_aspect", aspect_key)
+                    
+                    if last_aspect_key != aspect_key:
+                        # 视频比例变化，重置为默认背景
+                        st.session_state["selected_bg_key"] = "ancient_paper_1"
+                        st.session_state["last_bg_aspect"] = aspect_key
+                        st.info(f"🔄 视频比例切换为{'📱 竖屏' if is_portrait else '📺 横屏'}，已重置为默认背景")
+                    
+                    # 获取当前比例的背景列表（必须在比例确定后获取）
+                    bg_names = get_background_names(is_portrait=is_portrait)
+                    
+                    st.write(f"**{tr('Default Backgrounds')}** ({'📱 竖屏 9:16' if is_portrait else '📺 横屏 16:9'})")
+                    
+                    # 从 session_state 获取保存的选择
+                    saved_bg_key = st.session_state.get("selected_bg_key", "ancient_paper_1")
+                    saved_bg_index = 0
+                    for i, (key, _, _) in enumerate(bg_names):
+                        if key == saved_bg_key:
+                            saved_bg_index = i
+                            break
+                    
+                    # 使用动态 key 以便视频比例切换时重新渲染
+                    selected_bg_index = st.selectbox(
+                        tr("Select Background"),
+                        options=range(len(bg_names)),
+                        format_func=lambda x: f"{bg_names[x][1]} - {bg_names[x][2]}",
+                        index=saved_bg_index,
+                        key=f"default_background_select_{aspect_key}"  # 动态 key
+                    )
+                    
+                    selected_bg_key = bg_names[selected_bg_index][0]
+                    st.session_state["selected_bg_key"] = selected_bg_key
+                    
+                    # 重要：使用当前比例获取背景路径
+                    bg_path = get_background_path(selected_bg_key, is_portrait=is_portrait)
+                    
+                    if bg_path:
+                        # 显示紧凑的背景预览（缩小尺寸）
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.image(bg_path, caption=bg_names[selected_bg_index][1], width=200)
+                        with col2:
+                            st.caption(f"📐 比例: {'竖屏 1080x1920' if is_portrait else '横屏 1920x1080'}")
+                            st.caption(f"🎨 主题: {bg_names[selected_bg_index][1]}")
+                            st.caption(f"📝 说明: {bg_names[selected_bg_index][2]}")
+                        
+                        # 将背景添加到素材列表
+                        from app.models.schema import MaterialInfo
+                        m = MaterialInfo()
+                        m.provider = "local"
+                        m.url = bg_path
+                        if not params.video_materials:
+                            params.video_materials = []
+                        params.video_materials = [m]  # 只使用一个背景
+                    else:
+                        st.warning(tr("Background file not found, please check resource directory"))
+                else:
+                    # 上传自定义背景
+                    uploaded_files = st.file_uploader(
+                        tr("Upload Custom Background"),
+                        type=["jpg", "jpeg", "png"],
+                        accept_multiple_files=False,
+                        help=tr("Upload a custom background image (横屏: 1920x1080, 竖屏: 1080x1920)")
+                    )
+            else:
+                # 非古书卷轴主题：普通文件上传
+                uploaded_files = st.file_uploader(
+                    "Upload Local Files",
+                    type=["mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png"],
+                    accept_multiple_files=True,
+                )
 
         selected_index = st.selectbox(
             tr("Video Concat Mode"),
@@ -687,22 +821,7 @@ with middle_panel:
             video_transition_modes[selected_index][1]
         )
 
-        video_aspect_ratios = [
-            (tr("Portrait") + " (1080x1920)", VideoAspect.portrait.value),
-            (tr("Portrait") + " 720p (720x1280)", VideoAspect.portrait_720p.value),
-            (tr("Landscape") + " (1920x1080)", VideoAspect.landscape.value),
-            (tr("Landscape") + " 720p (1280x720)", VideoAspect.landscape_720p.value),
-        ]
-        selected_index = st.selectbox(
-            tr("Video Ratio"),
-            options=range(
-                len(video_aspect_ratios)
-            ),  # Use the index as the internal option value
-            format_func=lambda x: video_aspect_ratios[x][
-                0
-            ],  # The label is displayed to the user
-        )
-        params.video_aspect = VideoAspect(video_aspect_ratios[selected_index][1])
+        # 视频比例已经在前面选择过了，不需要重复
 
         params.video_clip_duration = st.selectbox(
             tr("Clip Duration"), options=[2, 3, 4, 5, 6, 7, 8, 9, 10], index=1

@@ -188,6 +188,13 @@
     "Standard Mode Selected": "已选择标准模式",
     "Full processing with all features": "完整处理并支持所有功能",
     "Using: MoviePy complete pipeline (supports all effects)": "使用：MoviePy 完整流程（支持所有效果）",
-    "Note: Processing may take longer but offers maximum flexibility": "注意：处理需要更长时间但提供最大灵活性"
+    "Note: Processing may take longer but offers maximum flexibility": "注意：处理需要更长时间但提供最大灵活性",
+    "Background Source": "背景来源",
+    "Default Backgrounds": "默认背景",
+    "Upload Custom": "上传自定义",
+    "Select Background Source": "选择背景来源",
+    "Select Background": "选择背景",
+    "Background file not found, please check resource directory": "背景文件未找到，请检查资源目录",
+    "Upload Custom Background": "上传自定义背景"
   }
 }

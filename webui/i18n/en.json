@@ -188,6 +188,13 @@
     "Standard Mode Selected": "Standard Mode Selected",
     "Full processing with all features": "Full processing with all features",
     "Using: MoviePy complete pipeline (supports all effects)": "Using: MoviePy complete pipeline (supports all effects)",
-    "Note: Processing may take longer but offers maximum flexibility": "Note: Processing may take longer but offers maximum flexibility"
+    "Note: Processing may take longer but offers maximum flexibility": "Note: Processing may take longer but offers maximum flexibility",
+    "Background Source": "Background Source",
+    "Default Backgrounds": "Default Backgrounds",
+    "Upload Custom": "Upload Custom",
+    "Select Background Source": "Select Background Source",
+    "Select Background": "Select Background",
+    "Background file not found, please check resource directory": "Background file not found, please check resource directory",
+    "Upload Custom Background": "Upload Custom Background"
   }
 }

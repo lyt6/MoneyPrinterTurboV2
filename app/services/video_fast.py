@@ -769,8 +769,9 @@ def generate_video_from_image_fast(
                     logger.info(f"  - 每屏可显示 {chars_per_screen} 个字符（{column_count}列 × {chars_per_column}字/列）")
                     
                     # 将字幕按时间和字符数分组成多屏
-                    screens = []  # [(start_time, end_time, chars_list)]
-                    current_screen_chars = []
+                    screens = []  # [(start_time, end_time, chars_with_time)]
+                    # chars_with_time: [(char, char_start_time, char_end_time), ...]
+                    current_screen_chars = []  # 存储 (char, start, end) 元组
                     current_screen_start = None
                     current_screen_end = None
                     
@@ -779,47 +780,61 @@ def generate_video_from_image_fast(
                         h, m, s = time_str.replace(',', '.').split(':')
                         return float(h) * 3600 + float(m) * 60 + float(s)
                     
+                    # 首先解析所有字幕，建立字符到时间的映射
                     for idx, (num, start_time, end_time, text) in enumerate(subtitles):
                         # 清理文本
                         clean_text = text.strip().replace('\n', '').replace('\r', '')
                         chars = list(clean_text)
                         
-                        # 如果是第一个字幕或者当前屏已满，开始新屏
-                        if current_screen_start is None:
-                            current_screen_start = parse_time(start_time)
+                        # 计算这句字幕的时间范围
+                        sentence_start = parse_time(start_time)
+                        sentence_end = parse_time(end_time)
+                        sentence_duration = sentence_end - sentence_start
                         
-                        # 添加字符到当前屏
-                        current_screen_chars.extend(chars)
-                        # 在每句字幕之间添加一个空格作为分隔符（除了最后一句）
-                        if idx < len(subtitles) - 1:
-                            current_screen_chars.append(' ')  # 添加空格分隔
-                        current_screen_end = parse_time(end_time)
+                        # 为每个字符分配精确的时间（基于当前句子的实际时间）
+                        char_duration = sentence_duration / len(chars) if len(chars) > 0 else sentence_duration
                         
-                        # 如果当前屏字符数达到上限，或者是最后一个字幕，保存这一屏
-                        if len(current_screen_chars) >= chars_per_screen or idx == len(subtitles) - 1:
-                            if current_screen_chars:
+                        for i, char in enumerate(chars):
+                            char_start = sentence_start + i * char_duration
+                            char_end = char_start + char_duration
+                            
+                            # 如果是第一个字符或者当前屏已满，开始新屏
+                            if current_screen_start is None:
+                                current_screen_start = char_start
+                            
+                            # 添加字符和其精确时间到当前屏
+                            current_screen_chars.append((char, char_start, char_end))
+                            current_screen_end = char_end
+                            
+                            # 如果当前屏字符数达到上限，保存这一屏
+                            if len(current_screen_chars) >= chars_per_screen:
                                 screens.append((
                                     current_screen_start,
                                     current_screen_end,
-                                    current_screen_chars[:chars_per_screen]  # 截取最多chars_per_screen个字符
+                                    current_screen_chars[:chars_per_screen]
                                 ))
-                                # 如果还有剩余字符，开始下一屏
-                                if len(current_screen_chars) > chars_per_screen:
-                                    current_screen_chars = current_screen_chars[chars_per_screen:]
-                                    current_screen_start = current_screen_end
-                                else:
-                                    current_screen_chars = []
-                                    current_screen_start = None
+                                # 开始下一屏
+                                current_screen_chars = []
+                                current_screen_start = None
+                        
+                        # 在每句字幕之间添加一个空格分隔符（除了最后一句）
+                        if idx < len(subtitles) - 1 and len(current_screen_chars) < chars_per_screen:
+                            # 空格使用当前句子的结束时间
+                            current_screen_chars.append((' ', sentence_end, sentence_end))
+                    
+                    # 保存最后一屏（如果有剩余字符）
+                    if current_screen_chars:
+                        screens.append((
+                            current_screen_start,
+                            current_screen_end,
+                            current_screen_chars
+                        ))
                     
                     logger.info(f"  - 共分为 {len(screens)} 屏显示")
                     
                     # 为每一屏创建drawtext滤镜（带时间控制和三色高亮效果）
-                    for screen_idx, (start_time, end_time, chars_list) in enumerate(screens):
-                        logger.info(f"  - 第{screen_idx + 1}屏: {start_time:.1f}s - {end_time:.1f}s，{len(chars_list)}个字符")
-                        
-                        # 计算每个字符的时间（均匀分配）
-                        screen_duration = end_time - start_time
-                        char_duration = screen_duration / len(chars_list) if len(chars_list) > 0 else screen_duration
+                    for screen_idx, (screen_start, screen_end, chars_with_time) in enumerate(screens):
+                        logger.info(f"  - 第{screen_idx + 1}屏: {screen_start:.2f}s - {screen_end:.2f}s，{len(chars_with_time)}个字符")
                         
                         # 将这一屏的字符排列成多列（从右向左，确保覆盖整个区域）
                         char_index = 0
@@ -833,15 +848,12 @@ def generate_video_from_image_fast(
                                 x_pos = subtitle_right
                             
                             for row in range(chars_per_column):
-                                if char_index >= len(chars_list):
+                                if char_index >= len(chars_with_time):
                                     break
                                 
-                                char = chars_list[char_index]
+                                # 获取字符和其精确的时间
+                                char, char_start_time, char_end_time = chars_with_time[char_index]
                                 y_pos = subtitle_y_start + row * int(subtitle_fontsize * char_spacing)
-                                
-                                # 计算当前字符的时间范围
-                                char_start_time = start_time + char_index * char_duration
-                                char_end_time = char_start_time + char_duration
                                 
                                 # 三色高亮效果：使用颜色主题
                                 if char.strip():  # 跳过空格
@@ -856,23 +868,23 @@ def generate_video_from_image_fast(
                                     read_stroke = theme_colors['read']['stroke']
                                     
                                     # 1. 未读状态（从屏幕开始到当前字开始朗读）
-                                    if char_start_time > start_time:
-                                        unread_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor={unread_color}:borderw=2:bordercolor={unread_stroke}:enable='between(t,{start_time},{char_start_time})'"
+                                    if char_start_time > screen_start:
+                                        unread_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor={unread_color}:borderw=2:bordercolor={unread_stroke}:enable='between(t,{screen_start:.3f},{char_start_time:.3f})'"
                                         video_filters.append(unread_filter)
                                     
                                     # 2. 正在读状态：高亮颜色+略微放大（当前字正在朗读时）
-                                    reading_fontsize = int(subtitle_fontsize * 1.1)  # 放大10%
-                                    reading_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={reading_fontsize}:fontcolor={reading_color}:borderw=2:bordercolor={reading_stroke}:enable='between(t,{char_start_time},{char_end_time})'"
+                                    reading_fontsize = int(subtitle_fontsize * 1.1)  # 放大9%
+                                    reading_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={reading_fontsize}:fontcolor={reading_color}:borderw=2:bordercolor={reading_stroke}:enable='between(t,{char_start_time:.3f},{char_end_time:.3f})'"
                                     video_filters.append(reading_filter)
                                     
                                     # 3. 已读状态（当前字读完到屏幕结束）
-                                    if char_end_time < end_time:
-                                        read_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor={read_color}:borderw=2:bordercolor={read_stroke}:enable='between(t,{char_end_time},{end_time})'"
+                                    if char_end_time < screen_end:
+                                        read_filter = f"drawtext=text='{char_escaped}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={subtitle_fontsize}:fontcolor={read_color}:borderw=2:bordercolor={read_stroke}:enable='between(t,{char_end_time:.3f},{screen_end:.3f})'"
                                         video_filters.append(read_filter)
                                 
                                 char_index += 1
                             
-                            if char_index >= len(chars_list):
+                            if char_index >= len(chars_with_time):
                                 break
                 
             elif video_theme == 'modern_book':
