@@ -522,6 +522,7 @@ def generate_video_from_image_fast(
     video_subject: str = None,  # 新增：视频主题/标题
     video_theme: str = None,    # 新增：视频主题模式
     subtitle_color_theme: str = "classic_gold",  # 新增：字幕颜色主题
+    font_size: int = 60,  # 新增：字体大小（用户配置）
 ) -> str:
     """
     从静态图片快速生成视频 - 使用FFmpeg直接处理，速度提升10倍以上
@@ -694,18 +695,21 @@ def generate_video_from_image_fast(
                 
                 # 将标题拆分成单个字符，竖排显示
                 chars = list(title_text)
-                fontsize = int(video_height * 0.05)  # 5%高度
+                # 标题字体大小：使用字幕字体的1.2倍，确保标题更醒目
+                title_fontsize = int(font_size * 1.3)  # 标题比字幕大30%
                 x_pos = int(video_width * 0.85)  # 右侧85%位置
                 
                 # 计算标题总高度并垂直居中
-                title_height = len(chars) * int(fontsize * 1.2)
+                title_height = len(chars) * int(title_fontsize * 1.2)
                 y_start = int((video_height - title_height) / 2)  # 垂直居中
+                
+                logger.info(f"  - 标题字体大小: {title_fontsize}px（字幕字体的1.3倍）")
                 
                 # 为每个字符创建drawtext滤镜
                 for i, char in enumerate(chars):
-                    y_pos = y_start + i * int(fontsize * 1.2)
+                    y_pos = y_start + i * int(title_fontsize * 1.2)
                     # 使用主题颜色
-                    char_filter = f"drawtext=text='{char}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={fontsize}:fontcolor={title_color}:borderw=2:bordercolor={title_stroke}"
+                    char_filter = f"drawtext=text='{char}':fontfile='{font_path_escaped}':x={x_pos}:y={y_pos}:fontsize={title_fontsize}:fontcolor={title_color}:borderw=2:bordercolor={title_stroke}"
                     video_filters.append(char_filter)
                 
                 # 添加竖排字幕（如果有字幕文件）
@@ -724,22 +728,23 @@ def generate_video_from_image_fast(
                     # 判断视频方向
                     is_portrait = video_height > video_width  # 竖屏
                     
+                    # 使用用户配置的字体大小，但根据视频比例进行适当调整
                     if is_portrait:
                         # 竖屏（9:16）：字体更大，列数更少，列间距适中
-                        subtitle_fontsize = int(video_height * 0.035)  # 3.5%高度
+                        subtitle_fontsize = max(int(font_size * 1.2), int(video_height * 0.030))  # 竖屏加大20%或至少3%高度
                         column_count = 6  # 6列
                         column_spacing_multiplier = 1.5  # 列间距倍数：1.5倍字体大小
                         subtitle_left = int(video_width * 0.10)  # 左边界10%
                         subtitle_right = int(video_width * 0.70)  # 右边界70%（离标题更近）
                         subtitle_y_start = int(video_height * 0.12)  # 竖屏：从12%开始（与标题靠近）
                     else:
-                        # 横屏（16:9）：字体适中，更多列，列间距更小
-                        subtitle_fontsize = int(video_height * 0.04)  # 4%高度
+                        # 横屏（16:9）：使用用户配置的字体大小
+                        subtitle_fontsize = max(int(font_size), int(video_height * 0.035))  # 使用配置值或至少3.5%高度
                         column_count = 15  # 15列（列间距减半后可放更多列）
                         column_spacing_multiplier = 0.75  # 列间距倍数：0.75倍字体大小（减半）
                         subtitle_left = int(video_width * 0.18)  # 左边界18%
                         subtitle_right = int(video_width * 0.80)  # 右边界80%（水平离标题更近）
-                        subtitle_y_start = int(video_height * 0.12)  # 横屏：从12%开始（恢复原位置）
+                        subtitle_y_start = int(video_height * 0.12)  # 横屏：从12%开始
                     
                     # 计算每列可容纳的字符数（根据视频比例计算可用高度）
                     if is_portrait:
